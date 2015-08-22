@@ -1679,6 +1679,27 @@ def lowestCurrent(requestContext, seriesList, n):
 
   return sorted( seriesList, key=safeLast )[:n]
 
+def lowestMin(requestContext, seriesList, n):
+  """
+  Takes one metric or a wildcard seriesList followed by an integer N.
+
+  Out of all metrics passed, draws only the N metrics with the lowest minimum
+  value in the time period specified.
+
+  Example:
+
+  .. code-block:: none
+
+    &target=lowestMin(server*.instance*.threads.busy,5)
+
+  Draws the top 5 servers who have had the least busy threads during the time
+  period specified.
+
+  """
+  result_list = sorted( seriesList, key=lambda s: min(s) )[:n]
+
+  return sorted(result_list, key=lambda s: min(s))
+
 def currentAbove(requestContext, seriesList, n):
   """
   Takes one metric or a wildcard seriesList followed by an integer N.
@@ -3457,6 +3478,7 @@ SeriesFunctions = {
   'highestCurrent' : highestCurrent,
   'lowestCurrent' : lowestCurrent,
   'highestMax' : highestMax,
+  'lowestMin' : lowestMin,  
   'currentAbove' : currentAbove,
   'currentBelow' : currentBelow,
   'highestAverage' : highestAverage,

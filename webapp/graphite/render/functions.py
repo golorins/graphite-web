@@ -2633,6 +2633,37 @@ def constantLine(requestContext, value):
   series.pathExpression = name
   return [series]
 
+def constantSeries(requestContext, value, seconds=10 ):
+  """
+  Takes a value and an optional step in seconds (default 10)
+
+  Return a timeseries with constant values from start to end every step seconds.
+  If the string 'null' is passed as value the series returned contains None
+  Usefull companion for the fallbackSeries function
+  
+  Example:
+
+  .. code-block:: none
+
+    &target=constantSeries(123.456)
+    &target=constantSeries(0, 30)
+    &target=constantSeries('null', 60)
+
+  """
+  name = "constantSeries(%s)" % str(value)
+  start = int(epoch( requestContext['startTime'] ) )
+  end = int(epoch( requestContext['endTime'] ) )
+
+  if value == "null":
+    value=None
+  values = []
+  for k in (range(start, end, seconds)):
+    values.append(value)
+  
+  series = TimeSeries(str(value), start, end, seconds, values)
+  series.pathExpression = name
+  return [series]
+
 def aggregateLine(requestContext, seriesList, func='avg'):
   """
   Draws a horizontal line based the function applied to the series.
@@ -3534,6 +3565,7 @@ SeriesFunctions = {
   'groupByNode' : groupByNode,
   'groupByNodes' : groupByNodes,
   'constantLine' : constantLine,
+  'constantSeries' : constantSeries,  
   'stacked' : stacked,
   'areaBetween' : areaBetween,
   'threshold' : threshold,

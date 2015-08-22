@@ -41,6 +41,28 @@ class FunctionsTest(TestCase):
         # Test the function works properly with an empty seriesList provided.
         self.assertEqual([], functions.highestMax({}, [], 1))
 
+    def test_lowest_min(self):
+        config = [20, 50, 30, 40]
+        seriesList = [range(max_val*2, max_val, -1) for max_val in config]
+
+        # Expect the test results to be returned in descending order
+        expected = [
+            [seriesList[0]],
+            [seriesList[0], seriesList[2]],
+            [seriesList[0], seriesList[2], seriesList[3]],
+            # Test where num_return == len(seriesList)
+            [seriesList[0], seriesList[2], seriesList[3], seriesList[1]],
+            # Test where num_return > len(seriesList)
+            [seriesList[0], seriesList[2], seriesList[3], seriesList[1]],
+        ]
+        for index, test in enumerate(expected):
+            results = functions.lowestMin({}, seriesList, index + 1)
+            self.assertEqual(test, results)
+
+    def test_lowest_min_empty_series_list(self):
+        # Test the function works properly with an empty seriesList provided.
+        self.assertEqual([], functions.lowestMin({}, [], 1))
+
     def testGetPercentile(self):
         seriesList = [
             ([None, None, 15, 20, 35, 40, 50], 20),

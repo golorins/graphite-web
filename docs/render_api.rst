@@ -89,7 +89,18 @@ Paths also support the following wildcards, which allows you to identify more th
   All wildcards apply only within a single path element.  In other words, they do not include or cross dots (``.``).
   Therefore, ``servers.*`` will not match ``servers.ix02ehssvc04v.cpu.total.user``, while ``servers.*.*.*.*`` will.
 
-  
+Tagged Series
+^^^^^^^^^^^^^
+
+When querying tagged series, we start with the `seriesByTag <functions.html#graphite.render.functions.seriesByTag>`_ function:
+
+.. code-block:: none
+
+    # find all series that have tag1 set to value1
+    seriesByTag('tag1=value1')
+
+See :ref:`querying tagged series <querying-tagged-series>` for more detail on using `seriesByTag <functions.html#graphite.render.functions.seriesByTag>`_.
+
 Examples
 ^^^^^^^^
 
@@ -122,6 +133,16 @@ You can also run any number of :doc:`functions </functions>` on the various metr
 
   &target=averageSeries(company.server*.applicationInstance.requestsHandled)
   (draws 1 aggregate line)
+
+Multiple function calls can be chained together either by nesting them or by piping the result into another function (it will be passed to the piped function as its first parameter):
+
+.. code-block:: none
+
+  &target=movingAverage(aliasByNode(company.server*.applicationInstance.requestsHandled,1),"5min")
+  &target=aliasByNode(company.server*.applicationInstance.requestsHandled,1)|movingAverage("5min")
+  &target=company.server*.applicationInstance.requestsHandled|aliasByNode(1)|movingAverage("5min")
+  &target=movingAverage(company.server*.applicationInstance.requestsHandled|aliasByNode(1),"5min")
+  (these are all equivalent)
 
 The target param can also be repeated to graph multiple related metrics.
 
@@ -163,7 +184,7 @@ mon            30 Days (month)
 y              365 Days (year)
 ============== ===============
 
-ABSOLUTE_TIME is in the format HH:MM_YYMMDD, YYYYMMDD, MM/DD/YY, or any other
+ABSOLUTE_TIME is in the format HH:MM_YYYYMMDD, YYYYMMDD, MM/DD/YY, or any other
 ``at(1)``-compatible time format.
 
 ============= =======
@@ -244,7 +265,7 @@ Data Display Formats
 ====================
 
 Along with rendering an image, the api can also generate
-`SVG <http://www.w3.org/Graphics/SVG/>`_  with embedded metadata or return the raw data in various
+`SVG <http://www.w3.org/Graphics/SVG/>`_  with embedded metadata, PDF, or return the raw data in various
 formats for external graphing, analysis or monitoring.
 
 format
@@ -262,6 +283,9 @@ Examples:
   &format=csv
   &format=json
   &format=svg
+  &format=pdf
+  &format=dygraph
+  &format=rickshaw
 
 png
 ^^^
@@ -359,6 +383,44 @@ an object describing the graph
     ]]>
   </script>
 
+pdf
+^^^
+Renders the graph as a PDF of size determined by width_ and height_.
+
+dygraph
+^^^^^^^
+Renders the data as a json object suitable for passing to a `Dygraph <http://dygraphs.com/data.html>`_ object.
+
+.. code-block:: none
+
+  {
+    "labels" : [
+      "Time",
+      "entries"
+    ],
+    "data" : [
+      [1468791890000, 0.0],
+      [1468791900000, 0.0]
+    ]
+  }
+
+rickshaw
+^^^^^^^^
+Renders the data as a json object suitable for passing to a `Rickshaw <http://code.shutterstock.com/rickshaw/tutorial/introduction.html>`_ object.
+
+.. code-block:: none
+
+  [{
+    "target": "entries",
+    "datapoints": [{
+      "y": 0.0,
+      "x": 1468791890
+    }, {
+      "y": 0.0,
+      "x": 1468791900
+    }]
+  }]
+
 pickle
 ^^^^^^
 Returns a Python `pickle <http://docs.python.org/library/pickle.html>`_ (serialized Python object).
@@ -435,7 +497,6 @@ Takes one of the following parameters which determines the fill mode to use:
   Creates a graph where the filled area of each target is stacked on one another.
   Each target line is displayed as the sum of all previous lines plus the value of the current line.
 
-
 .. _param-bgcolor:
   
 bgcolor
@@ -479,6 +540,8 @@ Examples:
   &bgcolor=blue
   &bgcolor=2222FF
   &bgcolor=5522FF60
+
+.. _param-cacheTimeout:
 
 cacheTimeout
 ------------
@@ -583,9 +646,13 @@ Example:
 
   &fontSize=8
 
+.. _param-format:
+
 format
 ------
 See: `Data Display Formats`_
+
+.. _param-from:
 
 from
 ----
@@ -598,6 +665,8 @@ graphOnly
 *Default: False*
 
 Display only the graph area with no grid lines, axes, or legend
+
+.. _param-graphType:
 
 graphType
 ---------
@@ -630,6 +699,20 @@ Example:
 
  &hideLegend=false
 
+.. _param-hideNullFromLegend:
+
+hideNullFromLegend
+------------------
+*Default: False*
+
+If set to ``true``, series with all null values will not be reported in the legend.
+
+Example:
+
+.. code-block:: none
+
+ &hideNullFromLegend=true
+
 .. _param-hideAxes:
 
 hideAxes
@@ -643,6 +726,14 @@ Example:
 .. code-block:: none
 
   &hideAxes=true
+
+.. _param-hideXAxis:
+
+hideXAxis
+---------
+*Default: False*
+
+If set to ``true`` the X Axis will not be rendered
 
 .. _param-hideYAxis:
 
@@ -666,6 +757,8 @@ Example:
 
   &hideGrid=true
 
+.. _param-height:
+
 height
 ------
 *Default: 250*
@@ -680,6 +773,8 @@ Example:
 
   &width=650&height=250
 
+.. _param-jsonp:
+
 jsonp
 -----
 *Default: <unset>*
@@ -687,17 +782,23 @@ jsonp
 If set and combined with ``format=json``, wraps the JSON response in a function call
 named by the parameter specified.
 
+.. _param-leftColor:
+
 leftColor
 ---------
 *Default: color chosen from* colorList_
 
 In dual Y-axis mode, sets the color of all metrics associated with the left Y-axis.
 
+.. _param-leftDashed:
+
 leftDashed
 ----------
 *Default: False*
 
 In dual Y-axis mode, draws all metrics associated with the left Y-axis using dashed lines
+
+.. _param-leftWidth:
 
 leftWidth
 ---------
@@ -749,6 +850,8 @@ logBase
 
 If set, draws the graph with a logarithmic scale of the specified base (e.g. 10 for common logarithm)
 
+.. _param-localOnly:
+
 localOnly
 ---------
 *Default: False*
@@ -772,6 +875,8 @@ Example:
 
   &majorGridLineColor=FF22FF
 
+.. _param-margin:
+
 margin
 ------
 *Default: 10*
@@ -783,16 +888,22 @@ Example:
 
   &margin=20
 
+.. _param-max:
+
 max
 ---
 .. deprecated:: 0.9.0
    See yMax_
+
+.. _param-maxDataPoints:
 
 maxDataPoints
 -------------
 Set the maximum numbers of datapoints returned when using json content. 
 
 If the number of datapoints in a selected range exceeds the maxDataPoints value then the datapoints over the whole period are consolidated.
+
+The function used to consolidate points can be set using the `consolidateBy <functions.html#graphite.render.functions.consolidateBy>`_ function.
 
 .. _param-minorGridLineColor:
 
@@ -822,6 +933,8 @@ Example:
 
   &minorY=3
 
+.. _param-min:
+
 min
 ---
 .. deprecated:: 0.9.0
@@ -841,16 +954,43 @@ than there are pixels in the graph area (e.g. a few month's worth of per-minute 
 'smooshed' as there will be a good deal of line overlap. In response, one may use lineWidth_ to compensate
 for this.
 
+.. _param-noCache:
+
 noCache
 -------
 *Default: False*
 
 Set to disable caching of rendered images
 
+.. _param-noNullPoints:
+
+noNullPoints
+------------
+*Default: False*
+
+If set and combined with ``format=json``, removes all null datapoints from the series returned.
+
+.. _param-pickle:
+
 pickle
 ------
 .. deprecated:: 0.9.10
   See `Data Display Formats`_
+
+.. _param-pieLabels:
+
+pieLabels
+---------
+*Default: horizontal*
+
+Orientation to use for slice labels inside of a pie chart.
+
+``horizontal``
+  Labels are oriented horizontally within each slice
+``rotated``
+  Labels are oriented radially within each slice
+
+.. _param-pieMode:
 
 pieMode
 -------
@@ -866,17 +1006,31 @@ One of:
 ``minimum``
   THe minimum of non-null points in the series
 
+.. _param-pretty:
+
+pretty
+------
+*Default: <unset>*
+
+If set to 1 and combined with ``format=json``, outputs human-friendly json.
+
+.. _param-rightColor:
+
 rightColor
 ----------
 *Default: color chosen from* colorList_
 
 In dual Y-axis mode, sets the color of all metrics associated with the right Y-axis.
 
+.. _param-rightDashed:
+
 rightDashed
 -----------
 *Default: False*
 
 In dual Y-axis mode, draws all metrics associated with the right Y-axis using dashed lines
+
+.. _param-rightWidth:
 
 rightWidth
 ----------
@@ -898,6 +1052,8 @@ Example:
 .. code-block:: none
 
   &template=plain
+
+.. _param-thickness:
 
 thickness
 ---------
@@ -946,9 +1102,42 @@ uniqueLegend
 
 Display only unique legend items, removing any duplicates
 
+.. _param-until:
+
 until
 -----
 See: `from / until`_
+
+.. _param-valueLabels:
+
+valueLabels
+-----------
+*Default: percent*
+
+Determines how slice labels are rendered within a pie chart.
+
+``none``
+  Slice labels are not shown
+``numbers``
+  Slice labels are reported with the original values
+``percent``
+  Slice labels are reported as a percent of the whole
+
+.. _param-valueLabelsColor:
+
+valueLabelsColor
+----------------
+*Default: black*
+
+Color used to draw slice labels within a pie chart.
+
+.. _param-valueLabelsMin:
+
+valueLabelsMin
+--------------
+*Default: 5*
+
+Slice values below this minimum will not have their labels rendered.
 
 .. _param-vtitle:
 
@@ -965,11 +1154,15 @@ Example:
 
   &vtitle=Threads
 
+.. _param-vtitleRight:
+
 vtitleRight
 -----------
 *Default: <unset>*
 
 In dual Y-axis mode, sets the title of the right Y-Axis (See: `vtitle`_)
+
+.. _param-width:
 
 width
 -----
@@ -984,6 +1177,19 @@ Example:
 .. code-block:: none
 
   &width=650&height=250
+
+.. _param-xFilesFactor:
+
+xFilesFactor
+------------
+*Default: DEFAULT_XFILES_FACTOR specified in local_settings.py or 0*
+
+Sets the default `xFilesFactor` value used when performing runtime aggregation across multiple
+series and/or intervals.
+
+See the `xFilesFactor <functions.html#graphite.render.functions.setXFilesFactor>`_ function for
+more information on the `xFilesFactor` value and how the default can be overridden for specific
+targets or series.
 
 .. _param-xFormat:
 
@@ -1003,25 +1209,33 @@ yAxisSide
 
 Sets the side of the graph on which to render the Y-axis. Accepts values of ``left`` or ``right``
 
-.. _param-yDivisor:
+.. _param-yDivisors:
   
-yDivisor
---------
+yDivisors
+---------
 *Default: 4,5,6*
 
-Supplies the preferred number of intermediate values for the Y-axis to display (Y values between
-the min and max). Note that Graphite will ultimately choose what values (and how many) to display
-based on a set of 'pretty' values. To explicitly set the Y-axis values, see `yStep`_
+Sets the preferred number of intermediate values to display on the Y-axis (Y values between the
+minimum and maximum).  Note that Graphite will ultimately choose what values (and how many) to 
+display based on a 'pretty' factor, which tries to maintain a sensible scale (e.g. preferring 
+intermediary values like 25%,50%,75% over 33.3%,66.6%).  To explicitly set the Y-axis values, 
+see `yStep`_
+
+.. _param-yLimit:
 
 yLimit
 ------
 *Reserved for future use*
 See: yMax_
 
+.. _param-yLimitLeft:
+
 yLimitLeft
 ----------
 *Reserved for future use*
 See: yMaxLeft_
+
+.. _param-yLimitRight:
 
 yLimitRight
 -----------
@@ -1056,17 +1270,25 @@ Example:
 
   &yMax=0.2345
 
+.. _param-yMaxLeft:
+
 yMaxLeft
 --------
 In dual Y-axis mode, sets the upper bound of the left Y-Axis (See: `yMax`_)
+
+.. _param-yMaxRight:
 
 yMaxRight
 ---------
 In dual Y-axis mode, sets the upper bound of the right Y-Axis (See: `yMax`_)
 
+.. _param-yMinLeft:
+
 yMinLeft
 --------
 In dual Y-axis mode, sets the lower bound of the left Y-Axis (See: `yMin`_)
+
+.. _param-yMinRight:
 
 yMinRight
 ---------
@@ -1080,9 +1302,13 @@ yStep
 
 Manually set the value step between Y-axis labels and grid lines
 
+.. _param-yStepLeft:
+
 yStepLeft
 ---------
 In dual Y-axis mode, Manually set the value step between the left Y-axis labels and grid lines (See: `yStep`_)
+
+.. _param-yStepRight:
 
 yStepRight
 ----------

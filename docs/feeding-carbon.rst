@@ -79,6 +79,7 @@ When AMQP_METRIC_NAME_IN_BODY is set to False, you should omit 'local.random.dic
 Getting Your Data Into Graphite
 ===============================
 
+
 The Basic Idea
 --------------
 
@@ -88,8 +89,9 @@ Graphite is useful if you have some numeric values that change over time and you
 Step 1 - Plan a Naming Hierarchy
 --------------------------------
 
-Everything stored in graphite has a path with components delimited by dots. So for example, website.orbitz.bookings.air or something like that would represent the number of air bookings on orbitz. Before producing your data you need to decide what your naming scheme will be.
-In a path such as "foo.bar.baz", each thing surrounded by dots is called a path component. So "foo" is a path component, as well as "bar", etc.
+Every series stored in Graphite has a unique identifier, which is composed of a matric name and optionally a set of tags.
+
+In a traditional hierarchy, website.orbitz.bookings.air or something like that would represent the number of air bookings on orbitz. Before producing your data you need to decide what your naming scheme will be.  In a path such as "foo.bar.baz", each thing surrounded by dots is called a path component. So "foo" is a path component, as well as "bar", etc.
 
 Each path component should have a clear and well-defined purpose.  Volatile path components should be kept as deep into the hierarchy as possible.
 
@@ -98,6 +100,12 @@ Matt _Aimonetti has a reasonably sane `post describing the organization of your 
 .. _Aimonetti: http://matt.aimonetti.net/posts/2013/06/26/practical-guide-to-graphite-monitoring/
 
 __ Aimonetti_
+
+The disadvantage of a purely hierarchical system is that it is very difficult to make changes to the hierarchy, since anything querying Graphite will also need to be updated.  Additionally, there is no built-in description of the meaning of any particular element in the hierarchy.
+
+To address these issues, Graphite also supports using tags to describe your metrics, which makes it much simpler to design the initial structure and to evolve it over time.  A tagged series is made up of a name and a set of tags, like "disk.used;datacenter=dc1;rack=a1;server=web01".  In that example, the series name is "disk.used" and the tags are "datacenter" = "dc1", "rack" = "a1", and "server" = "web01".  When series are named this way they can be selected using the `seriesByTag <functions.html#graphite.render.functions.seriesByTag>`_ function as described in :doc:`Graphite Tag Support </tags>`.
+
+When using a tagged naming scheme it is much easier to add or alter individual tags as needed.  It is important however to be aware that changing the number of tags reported for a given metric or the value of a tag will create a new database file on disk, so tags should not be used for data that changes over the lifetime of a particular metric.
 
 
 Step 2 - Configure your Data Retention
@@ -110,7 +118,7 @@ To determine the best retention configuration, you must answer all of the follow
 2. What is the finest precision you will require?
 3. How far back will you need to look at that level of precision?
 4. What is the coarsest precision you can use?
-5. How far back would you ever need to see data? (yes it has to be finite, and determine ahead of time)
+5. How far back would you ever need to see data? (yes it has to be finite, and determined ahead of time)
 
 Once you have picked your naming scheme and answered all of the retention questions, you need to create a schema by creating/editing the ``/opt/graphite/conf/storage-schemas.conf`` file.
 
@@ -138,7 +146,7 @@ Graphite understands messages with this format:
 
 ``value`` is the value that you want to assign to the metric at this time.
 
-``timestamp`` is the unix epoch time.
+``timestamp`` is the number of seconds since unix epoch time.
 
 A simple example of doing this from the unix terminal would look like this:
 

@@ -1,20 +1,35 @@
 import re
+
+from django.conf import settings
 from graphite.render.grammar import grammar
-from graphite.render.datalib import fetchData, TimeSeries
+from graphite.render.datalib import fetchData, TimeSeries, prefetchRemoteData
 
+def evaluateTarget(requestContext, targets, noPrefetch=False):
+  if not isinstance(targets, list):
+    targets = [targets]
 
-def evaluateTarget(requestContext, target):
-  tokens = grammar.parseString(target)
-  result = evaluateTokens(requestContext, tokens)
+  if settings.REMOTE_PREFETCH_DATA and not requestContext.get('localOnly') and not noPrefetch:
+    prefetchRemoteData(requestContext, targets)
 
-  if type(result) is TimeSeries:
-    return [result] #we have to return a list of TimeSeries objects
+  seriesList = []
 
-  else:
-    return result
+  for target in targets:
+    if isinstance(target, basestring):
+      if not target.strip():
+        continue
+      target = grammar.parseString(target)
 
+    result = evaluateTokens(requestContext, target)
 
-def evaluateTokens(requestContext, tokens, replacements=None):
+    # we have to return a list of TimeSeries objects
+    if isinstance(result, TimeSeries):
+      seriesList.append(result)
+    elif result:
+      seriesList.extend(result)
+
+  return seriesList
+
+def evaluateTokens(requestContext, tokens, replacements=None, pipedArg=None):
   if tokens.template:
     arglist = dict()
     if tokens.template.kwargs:
@@ -26,6 +41,12 @@ def evaluateTokens(requestContext, tokens, replacements=None):
     return evaluateTokens(requestContext, tokens.template, arglist)
 
   elif tokens.expression:
+    if tokens.expression.pipedCalls:
+      # when the expression has piped calls, we pop the right-most call and pass the remaining
+      # expression into it via pipedArg, to get the same result as a nested call
+      rightMost = tokens.expression.pipedCalls.pop()
+      return evaluateTokens(requestContext, rightMost, replacements, tokens)
+
     return evaluateTokens(requestContext, tokens.expression, replacements)
 
   elif tokens.pathExpression:
@@ -48,10 +69,14 @@ def evaluateTokens(requestContext, tokens, replacements=None):
     if tokens.call.funcname == 'template':
       # if template propagates down here, it means the grammar didn't match the invocation
       # as tokens.template. this generally happens if you try to pass non-numeric/string args
-      raise ValueError("invaild template() syntax, only string/numeric arguments are allowed")
+      raise ValueError("invalid template() syntax, only string/numeric arguments are allowed")
 
     func = SeriesFunctions[tokens.call.funcname]
-    args = [evaluateTokens(requestContext, arg, replacements) for arg in tokens.call.args]
+    rawArgs = tokens.call.args or []
+    if pipedArg is not None:
+      rawArgs.insert(0, pipedArg)
+    args = [evaluateTokens(requestContext, arg, replacements) for arg in rawArgs]
+    requestContext['args'] = rawArgs
     kwargs = dict([(kwarg.argname, evaluateTokens(requestContext, kwarg.args[0], replacements))
                    for kwarg in tokens.call.kwargs])
     try:
@@ -73,8 +98,11 @@ def evaluateTokens(requestContext, tokens, replacements=None):
   elif tokens.boolean:
     return tokens.boolean[0] == 'true'
 
+  elif tokens.none:
+    return None
+
   else:
-    raise ValueError("unknown token in target evaulator")
+    raise ValueError("unknown token in target evaluator")
 
 
 # Avoid import circularities

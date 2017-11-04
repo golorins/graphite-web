@@ -19,6 +19,8 @@ import time
 import sys
 import calendar
 import pytz
+import traceback
+from datetime import datetime
 from os.path import splitext, basename, relpath
 from shutil import move
 from tempfile import mkstemp
@@ -35,8 +37,7 @@ except ImportError:
   from StringIO import StringIO
 
 from django.conf import settings
-from django.contrib.auth.models import User
-from graphite.account.models import Profile
+from django.utils.timezone import make_aware
 from graphite.logger import log
 
 
@@ -57,39 +58,54 @@ def epoch(dt):
   """
   Returns the epoch timestamp of a timezone-aware datetime object.
   """
+  if not dt.tzinfo:
+    tb = traceback.extract_stack(None, 2)
+    log.warning('epoch() called with non-timezone-aware datetime in %s at %s:%d' % (tb[0][2], tb[0][0], tb[0][1]))
+    return calendar.timegm(make_aware(dt, pytz.timezone(settings.TIME_ZONE)).astimezone(pytz.utc).timetuple())
   return calendar.timegm(dt.astimezone(pytz.utc).timetuple())
 
-def getProfile(request, allowDefault=True):
-  if request.user.is_authenticated():
-    return Profile.objects.get_or_create(user=request.user)[0]
-  elif allowDefault:
-    return default_profile()
 
+def epoch_to_dt(timestamp):
+    """
+    Returns the timezone-aware datetime of an epoch timestamp.
+    """
+    return make_aware(datetime.utcfromtimestamp(timestamp), pytz.utc)
 
-def getProfileByUsername(username):
-  try:
-    return Profile.objects.get(user__username=username)
-  except Profile.DoesNotExist:
-    return None
+def timebounds(requestContext):
+  startTime = int(epoch(requestContext['startTime']))
+  endTime = int(epoch(requestContext['endTime']))
+  now = int(epoch(requestContext['now']))
 
+  return (startTime, endTime, now)
 
 def is_local_interface(host):
-  if ':' in host:
-    host = host.split(':',1)[0]
+  is_ipv6 = False
+  if ':' not in host:
+    pass
+  elif host.count(':') == 1:
+    host = host.split(':', 1)[0]
+  else:
+    is_ipv6 = True
+
+    if host.find('[', 0, 2) != -1:
+      last_bracket_position  = host.rfind(']')
+      last_colon_position = host.rfind(':')
+      if last_colon_position > last_bracket_position:
+        host = host.rsplit(':', 1)[0]
+      host = host.strip('[]')
 
   try:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.connect( (host, 4242) )
-    local_ip = sock.getsockname()[0]
-    sock.close()
+    if is_ipv6:
+      sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    else:
+      sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind( (host, 0) )
   except:
-    log.exception("Failed to open socket with %s" % host)
-    raise
+    return False
+  finally:
+    sock.close()
 
-  if local_ip == host:
-    return True
-
-  return False
+  return True
 
 
 def is_pattern(s):
@@ -110,21 +126,6 @@ def find_escaped_pattern_fields(pattern_string):
       yield index
 
 
-def default_profile():
-    # '!' is an unusable password. Since the default user never authenticates
-    # this avoids creating a default (expensive!) password hash at every
-    # default_profile() call.
-    user, created = User.objects.get_or_create(
-        username='default', defaults={'email': 'default@localhost.localdomain',
-                                      'password': '!'})
-    if created:
-        log.info("Default user didn't exist, created it")
-    profile, created = Profile.objects.get_or_create(user=user)
-    if created:
-        log.info("Default profile didn't exist, created it")
-    return profile
-
-
 def load_module(module_path, member=None):
   module_name = splitext(basename(module_path))[0]
   module_file = open(module_path, 'U')
@@ -135,9 +136,14 @@ def load_module(module_path, member=None):
   else:
     return module
 
-def timestamp(datetime):
+def timestamp(dt):
   "Convert a datetime object into epoch time"
-  return time.mktime( datetime.timetuple() )
+  return time.mktime(dt.timetuple())
+
+def deltaseconds(timedelta):
+  "Convert a timedelta object into seconds (same as timedelta.total_seconds() in Python 2.7+)"
+  return (timedelta.microseconds + (timedelta.seconds + timedelta.days * 24 * 3600) * 10**6) / 10**6
+
 
 # This whole song & dance is due to pickle being insecure
 # The SafeUnpickler classes were largely derived from
@@ -147,7 +153,7 @@ if USING_CPICKLE:
   class SafeUnpickler(object):
     PICKLE_SAFE = {
       'copy_reg': set(['_reconstructor']),
-      '__builtin__': set(['object', 'list']),
+      '__builtin__': set(['object', 'list', 'set']),
       'collections': set(['deque']),
       'graphite.render.datalib': set(['TimeSeries']),
       'graphite.intervals': set(['Interval', 'IntervalSet']),
@@ -173,7 +179,7 @@ else:
   class SafeUnpickler(pickle.Unpickler):
     PICKLE_SAFE = {
       'copy_reg': set(['_reconstructor']),
-      '__builtin__': set(['object', 'list']),
+      '__builtin__': set(['object', 'list', 'set']),
       'collections': set(['deque']),
       'graphite.render.datalib': set(['TimeSeries']),
       'graphite.intervals': set(['Interval', 'IntervalSet']),
@@ -219,7 +225,48 @@ def write_index(whisper_dir=None, ceres_dir=None, index=None):
   return None
 
 
-def build_index(base_path, extension, fd):
+def logtime(custom_msg=False, custom_name=False):
+  def wrap(f):
+    def wrapped_f(*args, **kwargs):
+      msg = 'completed in'
+      name = f.__module__ + '.' + f.__name__
+
+      t = time.time()
+      if custom_msg:
+        def set_msg(msg):
+          wrapped_f.msg = msg
+
+        kwargs['msg_setter'] = set_msg
+      if custom_name:
+        def set_name(name):
+          wrapped_f.name = name
+
+        kwargs['name_setter'] = set_name
+
+      try:
+        res = f(*args, **kwargs)
+      except:
+        msg = 'failed in'
+        raise
+      finally:
+        msg = getattr(wrapped_f, 'msg', msg)
+        name = getattr(wrapped_f, 'name', name)
+
+        log.info(
+          '{name} :: {msg} {sec:.6}s'.format(
+            name=name,
+            msg=msg,
+            sec=time.time() - t,
+          )
+        )
+
+      return res
+    return wrapped_f
+  return wrap
+
+
+@logtime(custom_msg=True)
+def build_index(base_path, extension, fd, msg_setter=None):
   t = time.time()
   total_entries = 0
   contents = os.walk(base_path, followlinks=True)
@@ -235,5 +282,5 @@ def build_index(base_path, extension, fd):
       total_entries += 1
       fd.write(line)
   fd.flush()
-  log.info("[IndexSearcher] index rebuild of \"%s\" took %.6f seconds (%d entries)" % (base_path, time.time() - t, total_entries))
+  msg_setter("[IndexSearcher] index rebuild of \"%s\" took" % base_path)
   return None

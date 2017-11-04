@@ -153,11 +153,11 @@ function createToolbarButton(tip, icon, handler) {
     listeners: {
       render: function (button) {
         button.el.toolTip = new Ext.ToolTip({
-	  html: tip,
-	  showDelay: 100,
-	  dismissDelay: 10000,
-	  target: button.el
-	});
+          html: tip,
+          showDelay: 100,
+          dismissDelay: 10000,
+          target: button.el
+        });
       }
     }
   });
@@ -412,7 +412,7 @@ function saveMyGraph(button, e) {
 
       if (!text) {
         Ext.Msg.alert("You must enter a graph name!");
-	return;
+        return;
       }
 
       if (text.charAt(text.length - 1) == '.') {
@@ -465,7 +465,7 @@ function deleteMyGraph() {
 
       if (!text) {
         Ext.Msg.alert("Invalid My Graph name!");
-	return;
+        return;
       }
 
       //Send the request
@@ -755,7 +755,7 @@ var GraphDataWindow = {
 
     Ext.each(this.getSelectedTargets(),
       function (target) {
-	var args = [];
+        var args = [];
         var i, c;
         var lastArg = 0;
         var depth = 0;
@@ -1084,11 +1084,15 @@ function createFunctionsMenu() {
         {text: 'ScaleToSeconds', handler: applyFuncToEachWithInput('scaleToSeconds', 'Please enter a number of seconds to scale to')},
         {text: 'Offset', handler: applyFuncToEachWithInput('offset', 'Please enter the value to offset Y-values by')},
         {text: 'OffsetToZero', handler: applyFuncToEach('offsetToZero')},
+        {text: 'Interpolate', handler: applyFuncToEach('interpolate')},
         {text: 'Derivative', handler: applyFuncToEach('derivative')},
         {text: 'Power', handler: applyFuncToEachWithInput('pow', 'Please enter a power factor')},
+        {text: 'Power Series', handler: applyFuncToEachWithInput('powSeries', 'Please enter at least 2 series')},
         {text: 'Square Root', handler: applyFuncToEach('squareRoot')},
         {text: 'Time-adjusted Derivative', handler: applyFuncToEachWithInput('perSecond', "Please enter a maximum value if this metric is a wrapping counter (or just leave this blank)", {allowBlank: true})},
+        {text: 'Delay', handler: applyFuncToEachWithInput('delay', 'Please enter the number of steps to delay')},
         {text: 'Integral', handler: applyFuncToEach('integral')},
+        {text: 'Integral by Interval', handler: applyFuncToEachWithInput('integralByInterval', 'Integral this metric with a reset every ___ (examples: 1d, 1h, 10min)', {quote: true})},
         {text: 'Percentile Values', handler: applyFuncToEachWithInput('percentileOfSeries', "Please enter the percentile to use")},
         {text: 'Non-negative Derivative', handler: applyFuncToEachWithInput('nonNegativeDerivative', "Please enter a maximum value if this metric is a wrapping counter (or just leave this blank)", {allowBlank: true})},
         {text: 'Log', handler: applyFuncToEachWithInput('log', 'Please enter a base')},
@@ -1105,12 +1109,18 @@ function createFunctionsMenu() {
         {text: 'Moving Average', handler: applyFuncToEachWithInput('movingAverage', 'Moving average for the last ___ data points')},
         {text: 'Moving Median', handler: applyFuncToEachWithInput('movingMedian', 'Moving median for the last ___ data points')},
         {text: 'Moving Standard Deviation', handler: applyFuncToEachWithInput('stdev', 'Moving standard deviation for the last ___ data points')},
+        {text: 'Moving Sum', handler: applyFuncToEachWithInput('movingSum', 'Moving sum for the last ___ data points')},
+        {text: 'Moving Min', handler: applyFuncToEachWithInput('movingMin', 'Moving minimum for the last ___ data points')},
+        {text: 'Moving Max', handler: applyFuncToEachWithInput('movingMin', 'Moving maximum for the last ___ data points')},
         {text: 'Holt-Winters Forecast', handler: applyFuncToEach('holtWintersForecast')},
         {text: 'Holt-Winters Confidence Bands', handler: applyFuncToEach('holtWintersConfidenceBands')},
         {text: 'Holt-Winters Aberration', handler: applyFuncToEach('holtWintersAberration')},
+        {text: 'Linear Regression', handler: applyFuncToEachWithInput('linearRegression', 'Start source of regression at (example: 14:57 20150115)', {quote: true})},
         {text: 'As Percent', handler: applyFuncToEachWithInput('asPercent', 'Please enter the value that corresponds to 100% or leave blank to use the total', {allowBlank: true})},
         {text: 'Difference (of 2 series)', handler: applyFuncToAll('diffSeries')},
-        {text: 'Ratio (of 2 series)', handler: applyFuncToAll('divideSeries')}
+        {text: 'Ratio (of 2 series)', handler: applyFuncToAll('divideSeries')},
+        {text: 'Ratio (of series lists)', handler: applyFuncToAll('divideSeriesLists')},
+        {text: 'Exponential Moving Average', handler: applyFuncToEachWithInput('exponentialMovingAverage', 'EMA for the last __ data points')}
       ]
     }, {
       text: 'Filter',
@@ -1148,7 +1158,8 @@ function createFunctionsMenu() {
         {text: 'limit', handler: applyFuncToEachWithInput('limit', 'Limit to first ___ of a list of metrics')},
         {text: 'Exclude', handler: applyFuncToEachWithInput('exclude', 'Exclude metrics that match a regular expression')},
         {text: 'Grep', handler: applyFuncToEachWithInput('grep', 'Exclude metrics that don\'t match a regular expression')},
-        {text: 'Remove Empty Series', handler: applyFuncToEachWithInput('removeEmptySeries', 'Removes series with no data from graph')}
+        {text: 'Remove Empty Series', handler: applyFuncToEachWithInput('removeEmptySeries', 'Removes series with no data from graph')},
+        {text: 'Remove Duplicates By Name', handler: applyFuncToAll('unique')}
       ]
     }, {
       text: 'Special',
@@ -1157,14 +1168,14 @@ function createFunctionsMenu() {
         {text: 'Set Legend Name By Metric', handler: applyFuncToEach('aliasByMetric')},
         {text: 'Set Legend Name By Node', handler: applyFuncToEachWithInput('aliasByNode', 'Enter the 0-indexed node to display')},
         {text: 'Add Values to Legend Name',
-	      	 menu: [
+                menu: [
                         {text: "Cacti Style Legend", handler: applyFuncToEach('cactiStyle')},
-        		{text: "Last Value", handler: applyFuncToEach('legendValue', '"last"')},
-        		{text: "Average Value", handler: applyFuncToEach('legendValue', '"avg"')},
-        		{text: "Total Value", handler: applyFuncToEach('legendValue', '"total"')},
-        		{text: "Min Value", handler: applyFuncToEach('legendValue', '"min"')},
-        		{text: "Max Value", handler: applyFuncToEach('legendValue', '"max"')}
-        		]},
+                        {text: "Last Value", handler: applyFuncToEach('legendValue', '"last"')},
+                        {text: "Average Value", handler: applyFuncToEach('legendValue', '"avg"')},
+                        {text: "Total Value", handler: applyFuncToEach('legendValue', '"total"')},
+                        {text: "Min Value", handler: applyFuncToEach('legendValue', '"min"')},
+                        {text: "Max Value", handler: applyFuncToEach('legendValue', '"max"')}
+                      ]},
         {text: 'Color', handler: applyFuncToEachWithInput('color', 'Set the color for this graph target', {quote: true})},
         {text: 'Alpha', handler: applyFuncToEachWithInput('alpha', 'Set the alpha (transparency) for this graph target (between 0.0 and 1.0)')},
         {text: 'Consolidate By',
@@ -1209,7 +1220,7 @@ function toggleAutoRefresh(button, pressed) {
     Composer.updateImage();
 
     //var interval = Math.min.apply(null, [context['interval'] for each (context in MetricContexts)] || [0]) || 60;
-    var interval = 60;
+    var interval = GraphiteConfig.refreshInterval;
     button.timer = setTimeout(doRefresh, interval * 1000)
   }
 
@@ -1369,7 +1380,8 @@ function createOptionsMenu() {
             menuRadioItem("legend", "Hide If Too Many", "hideLegend"),
             menuRadioItem("legend", "Always Hide", "hideLegend", "true"),
             menuRadioItem("legend", "Never Hide", "hideLegend", "false"),
-            menuCheckItem("Hide Duplicate Items", "uniqueLegend")
+            menuCheckItem("Hide Duplicate Items", "uniqueLegend"),
+            menuCheckItem("Hide Null Series", "hideNullFromLegend")
           ]
         }
       },

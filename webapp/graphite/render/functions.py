@@ -1876,18 +1876,19 @@ def aliasByNode(requestContext, seriesList, *nodes):
   """
   Takes a seriesList and applies an alias derived from one or more "node"
   portion/s of the target name. Node indices are 0 indexed.
+  Strings passed in nodes list are used for the corresponding position in the target name 
 
   .. code-block:: none
 
     &target=aliasByNode(ganglia.*.cpu.load5,1)
+    &target=aliasByNode(ganglia.*.cpu.load5,"server",1)
 
   """
   if isinstance(nodes, int):
     nodes=[nodes]
   for series in seriesList:
-    pathExpression = _getFirstPathExpression(series.name)
-    metric_pieces = pathExpression.split('.')
-    series.name = '.'.join(metric_pieces[n] for n in nodes)
+    metric_pieces = re.search('(?:.*\()?(?P<name>[-\w*\.]+)(?:,|\)?.*)?',series.name).groups()[0].split('.')
+    series.name = ".".join( metric_pieces[n] if isinstance(n,int) else n  for n in nodes)    
   return seriesList
 
 def aliasByMetric(requestContext, seriesList):

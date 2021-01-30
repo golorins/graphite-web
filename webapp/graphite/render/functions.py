@@ -2508,20 +2508,20 @@ def _getFirstPathExpression(name):
   return pathExpression
 
 
-def aliasByNode(requestContext, seriesList, *nodes):
+def aliasByTag(requestContext, seriesList, *nodes):
   """
   Takes a seriesList and applies an alias derived from one or more "node"
   portion/s of the target name or tags. Node indices are 0 indexed.
 
   .. code-block:: none
 
-    &target=aliasByNode(ganglia.*.cpu.load5,1)
+    &target=aliasByTag(ganglia.*.cpu.load5,1)
 
   Each node may be an integer referencing a node in the series name or a string identifying a tag.
 
   .. code-block:: none
 
-    &target=seriesByTag("name=~cpu.load.*", "server=~server[1-9]+", "datacenter=dc1")|aliasByNode("datacenter", "server", 1)
+    &target=seriesByTag("name=~cpu.load.*", "server=~server[1-9]+", "datacenter=dc1")|aliasByTag("datacenter", "server", 1)
 
     # will produce output series like
     # dc1.server1.load5, dc1.server2.load5, dc1.server1.load10, dc1.server2.load10
@@ -2531,8 +2531,8 @@ def aliasByNode(requestContext, seriesList, *nodes):
   return seriesList
 
 
-aliasByNode.group = 'Alias'
-aliasByNode.params = [
+aliasByTag.group = 'Alias'
+aliasByTag.params = [
   Param('seriesList', ParamTypes.seriesList, required=True),
   Param('nodes', ParamTypes.nodeOrTag, required=True, multiple=True),
 ]
@@ -5501,26 +5501,6 @@ groupByTags.params = [
 ]
 
 
-def aliasByTags(requestContext, seriesList, *tags):
-  """
-  Takes a seriesList and applies an alias derived from one or more tags and/or nodes
-
-  .. code-block:: none
-
-    &target=seriesByTag("name=cpu")|aliasByTags("server","name")
-
-  This is an alias for :py:func:`aliasByNode <aliasByNode>`.
-  """
-  return aliasByNode(requestContext, seriesList, *tags)
-
-
-aliasByTags.group = 'Alias'
-aliasByTags.params = [
-  Param('seriesList', ParamTypes.seriesList, required=True),
-  Param('tags', ParamTypes.nodeOrTag, required=True, multiple=True),
-]
-
-
 def events(requestContext, *tags):
   """
   Returns the number of events at this point in time. Usable with
@@ -5771,7 +5751,6 @@ SeriesFunctions = {
   # Alias functions
   'alias': alias,
   'aliasByMetric': aliasByMetric,
-  'aliasByNode': aliasByNode,
   'aliasByTags': aliasByTags,
   'aliasQuery': aliasQuery,
   'aliasSub': aliasSub,

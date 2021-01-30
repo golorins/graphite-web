@@ -1,4 +1,5 @@
-from __future__ import absolute_import
+from __future__ import absolute_import, division
+import sys
 
 try:
   from django.urls import reverse
@@ -6,7 +7,7 @@ except ImportError:  # Django < 1.10
   from django.core.urlresolvers import reverse
 
 from django.conf import settings
-from mock import patch
+from mock import patch, Mock
 
 from graphite.tags.localdatabase import LocalDatabaseTagDB
 from graphite.tags.redis import RedisTagDB
@@ -15,6 +16,14 @@ from graphite.tags.utils import TaggedSeries
 from graphite.util import json
 
 from tests.base import TestCase
+
+
+def json_bytes(obj, *args, **kwargs):
+  s = json.dumps(obj, *args, **kwargs)
+  if sys.version_info[0] >= 3:
+    return s.encode('utf-8')
+  return s
+
 
 class TagsTest(TestCase):
   def test_taggedseries(self):
@@ -28,7 +37,10 @@ class TagsTest(TestCase):
     self.assertEqual(parsed.path, 'test.a;blah=blah;hello=tiger')
 
     # test encoding
-    self.assertEqual(TaggedSeries.encode(parsed.path), '_tagged.2b0.2af.test-a;blah=blah;hello=tiger')
+    self.assertEqual(TaggedSeries.encode(parsed.path), '_tagged.2b0.2af.test_DOT_a;blah=blah;hello=tiger')
+
+    # test decoding
+    self.assertEqual(TaggedSeries.decode('_tagged.2b0.2af.test_DOT_a;blah=blah;hello=tiger'), parsed.path)
 
     # test path without tags
     parsed = TaggedSeries.parse('test.a')
@@ -40,7 +52,10 @@ class TagsTest(TestCase):
     self.assertEqual(parsed.path, 'test.a')
 
     # test encoding
-    self.assertEqual(TaggedSeries.encode(parsed.path), 'test.a')
+    self.assertEqual(TaggedSeries.encode('test.a', sep='/'), 'test/a')
+
+    # test encoding
+    self.assertEqual(TaggedSeries.decode('test/a', sep='/'), 'test.a')
 
     # test parsing openmetrics
     parsed = TaggedSeries.parse(r'test.a{hello="tiger",blah="bla\"h"}')
@@ -53,11 +68,11 @@ class TagsTest(TestCase):
     db.del_series('test.a;blah=blah;hello=tiger')
 
     result = db.get_series('test.a;blah=blah;hello=tiger')
-    self.assertEquals(result, None)
+    self.assertEqual(result, None)
 
     # tag a series
     result = db.tag_series('test.a;hello=tiger;blah=blah')
-    self.assertEquals(result, 'test.a;blah=blah;hello=tiger')
+    self.assertEqual(result, 'test.a;blah=blah;hello=tiger')
 
     # get series details
     result = db.get_series('test.a;blah=blah;hello=tiger')
@@ -67,47 +82,64 @@ class TagsTest(TestCase):
 
     # tag the same series again
     result = db.tag_series('test.a;blah=blah;hello=tiger')
-    self.assertEquals(result, 'test.a;blah=blah;hello=tiger')
+    self.assertEqual(result, 'test.a;blah=blah;hello=tiger')
 
     # tag another series
     result = db.tag_series('test.a;blah=blah;hello=lion')
-    self.assertEquals(result, 'test.a;blah=blah;hello=lion')
+    self.assertEqual(result, 'test.a;blah=blah;hello=lion')
 
     # get list of tags
     result = db.list_tags()
     tagList = [tag for tag in result if tag['tag'] in ['name', 'hello', 'blah']]
-    self.assertEquals(len(tagList), 3)
-    self.assertEquals(tagList[0]['tag'], 'blah')
-    self.assertEquals(tagList[1]['tag'], 'hello')
-    self.assertEquals(tagList[2]['tag'], 'name')
+    self.assertEqual(len(tagList), 3)
+    self.assertEqual(tagList[0]['tag'], 'blah')
+    self.assertEqual(tagList[1]['tag'], 'hello')
+    self.assertEqual(tagList[2]['tag'], 'name')
 
     # get filtered list of tags
     result = db.list_tags(tagFilter='hello|bla')
     tagList = [tag for tag in result if tag['tag'] in ['name', 'hello', 'blah']]
-    self.assertEquals(len(tagList), 2)
-    self.assertEquals(tagList[0]['tag'], 'blah')
-    self.assertEquals(tagList[1]['tag'], 'hello')
+    self.assertEqual(len(tagList), 2)
+    self.assertEqual(tagList[0]['tag'], 'blah')
+    self.assertEqual(tagList[1]['tag'], 'hello')
+
+    # get filtered & limited list of tags
+    result = db.list_tags(tagFilter='hello|bla', limit=1)
+    tagList = [tag for tag in result if tag['tag'] in ['name', 'hello', 'blah']]
+    self.assertEqual(len(tagList), 1)
+    self.assertEqual(tagList[0]['tag'], 'blah')
 
     # get tag & list of values
     result = db.get_tag('hello')
-    self.assertEquals(result['tag'], 'hello')
+    self.assertEqual(result['tag'], 'hello')
     valueList = [value for value in result['values'] if value['value'] in ['tiger', 'lion']]
-    self.assertEquals(len(valueList), 2)
-    self.assertEquals(valueList[0]['value'], 'lion')
-    self.assertEquals(valueList[1]['value'], 'tiger')
+    self.assertEqual(len(valueList), 2)
+    self.assertEqual(valueList[0]['value'], 'lion')
+    self.assertEqual(valueList[1]['value'], 'tiger')
+
+    # get tag & limited list of values
+    result = db.get_tag('hello', limit=1)
+    self.assertEqual(result['tag'], 'hello')
+    valueList = [value for value in result['values'] if value['value'] in ['tiger', 'lion']]
+    self.assertEqual(len(valueList), 1)
+    self.assertEqual(valueList[0]['value'], 'lion')
 
     # get tag & filtered list of values (match)
     result = db.get_tag('hello', valueFilter='tig')
-    self.assertEquals(result['tag'], 'hello')
+    self.assertEqual(result['tag'], 'hello')
     valueList = [value for value in result['values'] if value['value'] in ['tiger', 'lion']]
-    self.assertEquals(len(valueList), 1)
-    self.assertEquals(valueList[0]['value'], 'tiger')
+    self.assertEqual(len(valueList), 1)
+    self.assertEqual(valueList[0]['value'], 'tiger')
 
     # get tag & filtered list of values (no match)
     result = db.get_tag('hello', valueFilter='^tigr')
-    self.assertEquals(result['tag'], 'hello')
+    self.assertEqual(result['tag'], 'hello')
     valueList = [value for value in result['values'] if value['value'] in ['tiger', 'lion']]
-    self.assertEquals(len(valueList), 0)
+    self.assertEqual(len(valueList), 0)
+
+    # get nonexistent tag
+    result = db.get_tag('notarealtag')
+    self.assertIsNone(result)
 
     # basic find
     result = db.find_series(['hello=tiger'])
@@ -143,7 +175,7 @@ class TagsTest(TestCase):
 
     # add series without 'hello' tag
     result = db.tag_series('test.b;blah=blah')
-    self.assertEquals(result, 'test.b;blah=blah')
+    self.assertEqual(result, 'test.b;blah=blah')
 
     # find series without tag
     result = db.find_series(['name=test.b', 'hello='])
@@ -161,31 +193,82 @@ class TagsTest(TestCase):
     with self.assertRaises(ValueError):
       db.find_series('test=')
 
+    # tag multiple series
+    result = db.tag_multi_series([
+      'test.a;blah=blah;hello=lion',
+      'test.b;hello=lion;blah=blah',
+      'test.c;blah=blah;hello=lion',
+    ])
+    self.assertEqual(result, [
+      'test.a;blah=blah;hello=lion',
+      'test.b;blah=blah;hello=lion',
+      'test.c;blah=blah;hello=lion',
+    ])
+
     # delete series we added
     self.assertTrue(db.del_series('test.a;blah=blah;hello=tiger'))
     self.assertTrue(db.del_series('test.a;blah=blah;hello=lion'))
 
+    self.assertTrue(db.del_multi_series([
+      'test.b;blah=blah;hello=lion',
+      'test.c;blah=blah;hello=lion',
+    ]))
+
+    # sanitize name that isn't a valid tag value
+    result = db.tag_series('~~~my~~~.~~~weird~~~.~~~metric~~~.~~~name~~~')
+    self.assertEqual(result, 'my~~~.~~~weird~~~.~~~metric~~~.~~~name~~~')
+    result = db.find_series(['name=my~~~.~~~weird~~~.~~~metric~~~.~~~name~~~'])
+    self.assertEqual(result, ['my~~~.~~~weird~~~.~~~metric~~~.~~~name~~~'])
+    self.assertTrue(db.del_series('my~~~.~~~weird~~~.~~~metric~~~.~~~name~~~'))
+
+    # assert that it raises exception when sanitized name is still not valid
+    with self.assertRaises(Exception):
+      # sanitized name is going to be '', which is not a valid tag value
+      db.tag_series('~~~~')
+
+    with self.assertRaises(Exception):
+      # given tag value is invalid because it has length 0
+      db.parse('metric.name;tag=')
+
+    with self.assertRaises(Exception):
+      # given tag key is invalid because it has length 0
+      db.parse('metric.name;=value')
+
+    with self.assertRaises(Exception):
+      # given tag is missing =
+      db.parse('metric.name;tagvalue')
+
+    with self.assertRaises(Exception):
+      # given tag value is invalid because it starts with ~
+      db.parse('metric.name;tag=~value')
+
+    with self.assertRaises(Exception):
+      # given tag key is invalid because it contains !
+      db.parse('metric.name;ta!g=value')
+
   def test_local_tagdb(self):
-    return self._test_tagdb(LocalDatabaseTagDB())
+    return self._test_tagdb(LocalDatabaseTagDB(settings))
 
   def test_redis_tagdb(self):
-    return self._test_tagdb(RedisTagDB())
+    return self._test_tagdb(RedisTagDB(settings))
 
   def test_tagdb_autocomplete(self):
     self.maxDiff = None
 
-    db = LocalDatabaseTagDB()
+    db = LocalDatabaseTagDB(settings)
 
     self._test_autocomplete(db, 'graphite.tags.localdatabase.LocalDatabaseTagDB.find_series')
 
   def _test_autocomplete(self, db, patch_target):
     search_exprs = ['name=test.a']
 
-    def mock_find_series(self, exprs):
-      if exprs != search_exprs:
+    find_result = [('test.a;tag1=value1.%3d;tag2=value2.%3d' % (i, 201 - i)) for i in range(1,201)]
+
+    def mock_find_series(self, exprs, requestContext=None):
+      if search_exprs[0] not in exprs:
         raise Exception('Unexpected exprs %s' % str(exprs))
 
-      return [('test.a;tag1=value1.%3d;tag2=value2.%3d' % (i, 201 - i)) for i in range(1,201)]
+      return find_result
 
     with patch(patch_target, mock_find_series):
       result = db.auto_complete_tags(search_exprs)
@@ -208,23 +291,47 @@ class TagsTest(TestCase):
       result = db.auto_complete_values(search_exprs, 'tag1', 'value1.1')
       self.assertEqual(result, [('value1.%3d' % i) for i in range(100,200)])
 
+      result = db.auto_complete_values(search_exprs, 'tag1', 'value1.1', limit=50)
+      self.assertEqual(result, [('value1.%3d' % i) for i in range(100,150)])
+
       result = db.auto_complete_values(search_exprs, 'nonexistenttag1', 'value1.1')
       self.assertEqual(result, [])
 
+      find_result = [('test.a;tag1=value1.%3d;tag2=value2.%3d' % (i // 2, (201 - i) // 2)) for i in range(2,202)]
+
+      result = db.auto_complete_values(search_exprs, 'tag1', 'value1.', limit=50)
+      self.assertEqual(result, [('value1.%3d' % i) for i in range(1,51)])
+
   def test_find_series_cached(self):
-      def mock_cache_get(cacheKey):
-        if cacheKey != 'TagDB.find_series:hello=tiger:name=test.a':
-          raise Exception('Unexpected cacheKey %s' % cacheKey)
+    mockCache = Mock()
+    mockCache.get.return_value = ['test.a;blah=blah;hello=tiger']
 
-        return ['test.a;blah=blah;hello=tiger']
+    result = LocalDatabaseTagDB(settings, cache=mockCache).find_series(['name=test.a','hello=tiger'])
+    self.assertEqual(mockCache.get.call_count, 1)
+    self.assertEqual(mockCache.get.call_args[0][0], 'TagDB.find_series:hello=tiger:name=test.a')
+    self.assertEqual(result, ['test.a;blah=blah;hello=tiger'])
 
-      with patch('django.core.cache.cache.get', mock_cache_get):
-        result = LocalDatabaseTagDB().find_series(['name=test.a','hello=tiger'])
-        self.assertEqual(result, ['test.a;blah=blah;hello=tiger'])
+  def test_tagdb_cached(self):
+    mockCache = Mock()
+    mockCache.get.return_value = []
+
+    mockLog = Mock()
+
+    result = LocalDatabaseTagDB(settings, cache=mockCache, log=mockLog).find_series(['tag2=value2', 'tag1=value1'])
+
+    self.assertEqual(mockCache.get.call_count, 1)
+    self.assertEqual(mockCache.get.call_args[0][0], 'TagDB.find_series:tag1=value1:tag2=value2')
+    self.assertEqual(result, [])
+
+    self.assertEqual(mockLog.info.call_count, 1)
+    self.assertRegexpMatches(
+      mockLog.info.call_args[0][0],
+      r'graphite\.tags\.localdatabase\.LocalDatabaseTagDB\.find_series :: completed \(cached\) in [-.e0-9]+s'
+    )
 
   def test_http_tagdb(self):
     # test http tagdb using django client
-    db = HttpTagDB()
+    db = HttpTagDB(settings)
     db.base_url = reverse('tagList').replace('/tags', '')
     db.username = ''
     db.password = ''
@@ -242,10 +349,17 @@ class TagsTest(TestCase):
       else:
         self.assertEqual(headers, {})
 
+      req_fields = {}
+      for (field, value) in fields:
+        if field in req_fields:
+          req_fields[field].append(value)
+        else:
+          req_fields[field] = [value]
+
       if method == 'POST':
-        result = self.client.post(url, fields)
+        result = self.client.post(url, req_fields)
       elif method == 'GET':
-        result = self.client.get(url, fields)
+        result = self.client.get(url, req_fields)
       else:
         raise Exception('Invalid HTTP method %s' % method)
 
@@ -262,15 +376,15 @@ class TagsTest(TestCase):
       db.password = 'test'
 
       result = db.tag_series('test.a;hello=tiger;blah=blah')
-      self.assertEquals(result, 'test.a;blah=blah;hello=tiger')
+      self.assertEqual(result, 'test.a;blah=blah;hello=tiger')
 
       result = db.list_values('hello')
       valueList = [value for value in result if value['value'] in ['tiger', 'lion']]
-      self.assertEquals(len(valueList), 1)
-      self.assertEquals(valueList[0]['value'], 'tiger')
+      self.assertEqual(len(valueList), 1)
+      self.assertEqual(valueList[0]['value'], 'tiger')
 
       result = db.list_values('notarealtag')
-      self.assertEquals(result, [])
+      self.assertEqual(result, [])
 
       self.assertTrue(db.del_series('test.a;blah=blah;hello=tiger'))
 
@@ -303,7 +417,7 @@ class TagsTest(TestCase):
     response = self.client.post(url + '/tagSeries', {'path': 'test.a;hello=tiger;blah=blah'})
     self.assertEqual(response.status_code, 200)
     self.assertEqual(response['Content-Type'], 'application/json')
-    self.assertEqual(response.content, json.dumps(expected, indent=2, sort_keys=True))
+    self.assertEqual(response.content, json_bytes(expected, sort_keys=True))
 
     ## list tags
 
@@ -373,7 +487,7 @@ class TagsTest(TestCase):
     response = self.client.get(url + '/findSeries?expr[]=name=test.a&expr[]=hello=tiger&expr[]=blah=blah&pretty=1')
     self.assertEqual(response.status_code, 200)
     self.assertEqual(response['Content-Type'], 'application/json')
-    self.assertEqual(response.content, json.dumps(expected, indent=2, sort_keys=True))
+    self.assertEqual(response.content, json_bytes(expected, indent=2, sort_keys=True))
 
     # tag another series
     expected = 'test.a;blah=blah;hello=lion'
@@ -381,7 +495,7 @@ class TagsTest(TestCase):
     response = self.client.post(url + '/tagSeries', {'path': 'test.a;hello=lion;blah=blah'})
     self.assertEqual(response.status_code, 200)
     self.assertEqual(response['Content-Type'], 'application/json')
-    self.assertEqual(response.content, json.dumps(expected, indent=2, sort_keys=True))
+    self.assertEqual(response.content, json_bytes(expected, sort_keys=True))
 
     ## autocomplete tags
 
@@ -394,7 +508,7 @@ class TagsTest(TestCase):
 
     response = self.client.get(url + '/autoComplete/tags?tagPrefix=hello&pretty=1')
     self.assertEqual(response['Content-Type'], 'application/json')
-    self.assertEqual(response.content, json.dumps(expected, indent=2, sort_keys=True))
+    self.assertEqual(response.content, json_bytes(expected, indent=2, sort_keys=True))
 
     expected = [
       'blah',
@@ -403,7 +517,7 @@ class TagsTest(TestCase):
 
     response = self.client.get(url + '/autoComplete/tags?expr[]=name=test.a&pretty=1')
     self.assertEqual(response['Content-Type'], 'application/json')
-    self.assertEqual(response.content, json.dumps(expected, indent=2, sort_keys=True))
+    self.assertEqual(response.content, json_bytes(expected, indent=2, sort_keys=True))
 
     expected = [
       'hello',
@@ -412,36 +526,38 @@ class TagsTest(TestCase):
     response = self.client.get(url + '/autoComplete/tags?expr=name=test.a&tagPrefix=hell&pretty=1')
     self.assertEqual(response.status_code, 200)
     self.assertEqual(response['Content-Type'], 'application/json')
-    self.assertEqual(response.content, json.dumps(expected, indent=2, sort_keys=True))
+    self.assertEqual(response.content, json_bytes(expected, indent=2, sort_keys=True))
 
     ## autocomplete values
 
     response = self.client.put(url + '/autoComplete/values', {})
     self.assertEqual(response.status_code, 405)
 
+    expected = {'error': 'no tag specified'}
+
     response = self.client.get(url + '/autoComplete/values', {})
     self.assertEqual(response.status_code, 400)
     self.assertEqual(response['Content-Type'], 'application/json')
-    self.assertEqual(response.content, json.dumps({'error': 'no tag specified'}))
+    self.assertEqual(response.content, json_bytes(expected))
 
     expected = ['lion','tiger']
 
     response = self.client.get(url + '/autoComplete/values?tag=hello&pretty=1')
     self.assertEqual(response['Content-Type'], 'application/json')
-    self.assertEqual(response.content, json.dumps(expected, indent=2, sort_keys=True))
+    self.assertEqual(response.content, json_bytes(expected, indent=2, sort_keys=True))
 
     expected = ['lion','tiger']
 
     response = self.client.get(url + '/autoComplete/values?expr[]=name=test.a&tag=hello&pretty=1')
     self.assertEqual(response['Content-Type'], 'application/json')
-    self.assertEqual(response.content, json.dumps(expected, indent=2, sort_keys=True))
+    self.assertEqual(response.content, json_bytes(expected, indent=2, sort_keys=True))
 
     expected = ['lion']
 
     response = self.client.get(url + '/autoComplete/values?expr=name=test.a&tag=hello&valuePrefix=li&pretty=1')
     self.assertEqual(response.status_code, 200)
     self.assertEqual(response['Content-Type'], 'application/json')
-    self.assertEqual(response.content, json.dumps(expected, indent=2, sort_keys=True))
+    self.assertEqual(response.content, json_bytes(expected, indent=2, sort_keys=True))
 
     ## delSeries
 
@@ -460,7 +576,7 @@ class TagsTest(TestCase):
     response = self.client.post(url + '/delSeries', {'path': 'test.a;blah=blah;hello=tiger'})
     self.assertEqual(response.status_code, 200)
     self.assertEqual(response['Content-Type'], 'application/json')
-    self.assertEqual(response.content, json.dumps(expected))
+    self.assertEqual(response.content, json_bytes(expected, sort_keys=True))
 
     # delete second series
     expected = True
@@ -468,7 +584,7 @@ class TagsTest(TestCase):
     response = self.client.post(url + '/delSeries', {'path': 'test.a;blah=blah;hello=lion'})
     self.assertEqual(response.status_code, 200)
     self.assertEqual(response['Content-Type'], 'application/json')
-    self.assertEqual(response.content, json.dumps(expected))
+    self.assertEqual(response.content, json_bytes(expected, sort_keys=True))
 
     # delete nonexistent series
 
@@ -477,7 +593,7 @@ class TagsTest(TestCase):
     response = self.client.post(url + '/delSeries', {'path': 'test.a;blah=blah;hello=lion'})
     self.assertEqual(response.status_code, 200)
     self.assertEqual(response['Content-Type'], 'application/json')
-    self.assertEqual(response.content, json.dumps(expected))
+    self.assertEqual(response.content, json_bytes(expected, sort_keys=True))
 
     # find nonexistent series
     expected = []
@@ -485,4 +601,76 @@ class TagsTest(TestCase):
     response = self.client.get(url + '/findSeries?expr=name=test.a&expr=hello=tiger&expr=blah=blah')
     self.assertEqual(response.status_code, 200)
     self.assertEqual(response['Content-Type'], 'application/json')
-    self.assertEqual(response.content, json.dumps(expected, indent=2, sort_keys=True))
+    self.assertEqual(response.content, json_bytes(expected, sort_keys=True))
+
+    # tag multiple series
+
+    # get should fail
+    response = self.client.get(url + '/tagMultiSeries', {'path': 'test.a;hello=tiger;blah=blah'})
+    self.assertEqual(response.status_code, 405)
+
+    # post without path should fail
+    response = self.client.post(url + '/tagMultiSeries', {})
+    self.assertEqual(response.status_code, 400)
+    self.assertEqual(response['Content-Type'], 'application/json')
+
+    # multiple path should succeed
+    expected = [
+      'test.a;blah=blah;hello=tiger',
+      'test.b;blah=blah;hello=tiger',
+    ]
+
+    response = self.client.post(url + '/tagMultiSeries', {
+      'path': [
+        'test.a;hello=tiger;blah=blah',
+        'test.b;hello=tiger;blah=blah',
+      ],
+      'pretty': '1',
+    })
+    self.assertEqual(response.status_code, 200)
+    self.assertEqual(response['Content-Type'], 'application/json')
+    self.assertEqual(response.content, json_bytes(expected, indent=2, sort_keys=True))
+
+    # multiple path[] should succeed
+    expected = [
+      'test.a;blah=blah;hello=tiger',
+      'test.b;blah=blah;hello=tiger',
+    ]
+
+    response = self.client.post(url + '/tagMultiSeries', {
+      'path[]': [
+        'test.a;hello=tiger;blah=blah',
+        'test.b;hello=tiger;blah=blah',
+      ],
+      'pretty': '1',
+    })
+    self.assertEqual(response.status_code, 200)
+    self.assertEqual(response['Content-Type'], 'application/json')
+    self.assertEqual(response.content, json_bytes(expected, indent=2, sort_keys=True))
+
+    # remove multiple series
+    expected = True
+
+    response = self.client.post(url + '/delSeries', {
+      'path': [
+        'test.a;hello=tiger;blah=blah',
+        'test.b;hello=tiger;blah=blah',
+      ],
+      'pretty': '1',
+    })
+    self.assertEqual(response.status_code, 200)
+    self.assertEqual(response['Content-Type'], 'application/json')
+    self.assertEqual(response.content, json_bytes(expected, indent=2, sort_keys=True))
+
+    expected = True
+
+    response = self.client.post(url + '/delSeries', {
+      'path[]': [
+        'test.a;hello=tiger;blah=blah',
+        'test.b;hello=tiger;blah=blah',
+      ],
+      'pretty': '1',
+    })
+    self.assertEqual(response.status_code, 200)
+    self.assertEqual(response['Content-Type'], 'application/json')
+    self.assertEqual(response.content, json_bytes(expected, indent=2, sort_keys=True))

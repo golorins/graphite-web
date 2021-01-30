@@ -1,3 +1,5 @@
+.. _tags:
+
 Graphite Tag Support
 ====================
 From the release of the 1.1.x series, Graphite supports storing data using tags to identify each series.  This allows for much more flexibility than the traditional hierarchical layout.  When using tag support, each series is uniquely identified by its name and set of tag/value pairs.
@@ -14,6 +16,8 @@ To enter tagged series into Graphite, they should be passed to Carbon by appendi
 Carbon will automatically decode the tags, normalize the tag order, and register the series in the tag database.
 
 .. _querying-tagged-series:
+
+Tag names must have a length >= 1 and may contain any ascii characters except ``;!^=``. Tag values must also have a length >= 1, they may contain any ascii characters except ``;`` and the first character must not be ``~``. UTF-8 characters may work for names and values, but they are not well tested and it is not recommended to use non-ascii characters in metric names or tags. Metric names get indexed under the special tag `name`, if a metric name starts with one or multiple `~` they simply get removed from the derived tag value because the `~` character is not allowed to be in the first position of the tag value. If a metric name consists of no other characters than `~`, then it is considered invalid and may get dropped.
 
 Querying
 --------
@@ -86,13 +90,15 @@ Finally, the `aliasByTags <functions.html#graphite.render.functions.aliasByTags>
     # web01.disk.used
     # web02.disk.used
 
+If a tag name or value contains quotes (``'"``), then they will need to be escaped properly. For example a series with a tag ``tagName='quotedValue'`` could be queried with ``seriesByTag('tagName=\'quotedValue\'')`` or alternatively ``seriesByTag("tagName='quotedValue'")``.
+
 Database Storage
 ----------------
 As Whisper and other storage backends are designed to hold simple time-series data (metric key, value, and timestamp), Graphite stores tag information in a separate tag database (TagDB).  The TagDB is a pluggable store, by default it uses the Graphite SQLite, MySQL or PostgreSQL database, but it can also be configured to use an external Redis server or a custom plugin.
 
 .. note::
 
-  Tag support requires Graphite webapp & carbon version 1.1.0 or newer.
+  Tag support requires Graphite webapp & carbon version 1.1.1 or newer.
 
 Local Database TagDB
 ^^^^^^^^^^^^^^^^^^^^
@@ -102,24 +108,30 @@ The Local TagDB stores tag information in tables inside the graphite-web databas
 Redis TagDB
 ^^^^^^^^^^^
 
-The Redis TagDB will store the tag information on a Redis server, and is selected by setting ``TAGDB='graphite.tags.redis.RedisTagDB'`` in `local_settings.py`.  There are 3 additional config settings for the Redis TagDB::
+The Redis TagDB will store the tag information on a Redis server, and is selected by setting ``TAGDB='graphite.tags.redis.RedisTagDB'`` in `local_settings.py`.  There are 4 additional config settings for the Redis TagDB::
 
     TAGDB_REDIS_HOST = 'localhost'
     TAGDB_REDIS_PORT = 6379
     TAGDB_REDIS_DB = 0
+    TAGDB_REDIS_PASSWORD = ''
 
-The default settings (above) will connect to a local Redis server on the default port, and use the default database.
+The default settings (above) will connect to a local Redis server on the default port, and use the default database without password.
 
 HTTP(S) TagDB
 ^^^^^^^^^^^^^
 
-The HTTP(S) TagDB is used to delegate all tag operations to an external server that implements the Graphite tagging HTTP API.  It can be used in clustered graphite scenarios, or with custom data stores.  It is selected by setting ``TAGDB='graphite.tags.http.HttpTagDB'`` in `local_settings.py`.  There are 3 additional config settings for the HTTP(S) TagDB::
+The HTTP(S) TagDB is used to delegate all tag operations to an external server that implements the Graphite tagging HTTP API.  It can be used in clustered graphite scenarios, or with custom data stores.  It is selected by setting ``TAGDB='graphite.tags.http.HttpTagDB'`` in `local_settings.py`.  There are 4 additional config settings for the HTTP(S) TagDB::
 
     TAGDB_HTTP_URL = 'https://another.server'
     TAGDB_HTTP_USER = ''
     TAGDB_HTTP_PASSWORD = ''
+    TAGDB_HTTP_AUTOCOMPLETE = False
 
 The ``TAGDB_HTTP_URL`` is required. ``TAGDB_HTTP_USER`` and ``TAGDB_HTTP_PASSWORD`` are optional and if specified will be used to send a Basic Authorization header in all requests.
+
+``TAGDB_HTTP_AUTOCOMPLETE`` is also optional, if set to ``True`` auto-complete requests will be forwarded to the remote TagDB, otherwise calls to `/tags/findSeries`, `/tags` & `/tags/<tag>` will be used to provide auto-complete functionality.
+
+If ``REMOTE_STORE_FORWARD_HEADERS`` is defined, those headers will also be forwarded to the remote TagDB.
 
 Adding Series to the TagDB
 --------------------------
@@ -135,6 +147,22 @@ Series can be submitted via HTTP POST using command-line tools such as ``curl`` 
     "disk.used;datacenter=dc1;rack=a1;server=web01"
 
 This endpoint returns the canonicalized version of the path, with the tags sorted in alphabetical order.
+
+To add multiple series with a single HTTP request, use the ``/tags/tagMultiSeries`` endpoint, which support multiple ``path`` parameters:
+
+.. code-block:: none
+
+    $ curl -X POST "http://graphite/tags/tagMultiSeries" \
+      --data-urlencode 'path=disk.used;rack=a1;datacenter=dc1;server=web01' \
+      --data-urlencode 'path=disk.used;rack=a1;datacenter=dc1;server=web02' \
+      --data-urlencode 'pretty=1'
+
+    [
+      "disk.used;datacenter=dc1;rack=a1;server=web01",
+      "disk.used;datacenter=dc1;rack=a1;server=web02"
+    ]
+
+This endpoint returns a list of the canonicalized paths, in the same order they are specified.
 
 Exploring Tags
 --------------
@@ -307,5 +335,15 @@ Series can be deleted via HTTP POST to the `/tags/delSeries` endpoint:
 
     $ curl -X POST "http://graphite/tags/delSeries" \
       --data-urlencode 'path=disk.used;datacenter=dc1;rack=a1;server=web01'
+
+    true
+
+To delete multiple series at once pass multiple ``path`` parameters:
+
+.. code-block:: none
+
+    $ curl -X POST "http://graphite/tags/delSeries" \
+      --data-urlencode 'path=disk.used;datacenter=dc1;rack=a1;server=web01' \
+      --data-urlencode 'path=disk.used;datacenter=dc1;rack=a1;server=web02'
 
     true

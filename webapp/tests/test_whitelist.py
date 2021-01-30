@@ -14,6 +14,7 @@ from .base import TestCase
 
 from graphite.whitelist.views import load_whitelist, save_whitelist
 
+
 class WhitelistTester(TestCase):
     settings.WHITELIST_FILE = os.path.join(DATA_DIR, 'lists/whitelist')
 
@@ -35,7 +36,7 @@ class WhitelistTester(TestCase):
     def test_whitelist_show_no_whitelist(self):
         url = reverse('whitelist_show')
         with self.assertRaises(IOError):
-          response = self.client.get(url)
+            _ = self.client.get(url)
 
     def test_whitelist_show(self):
         url = reverse('whitelist_show')
@@ -43,7 +44,7 @@ class WhitelistTester(TestCase):
         self.addCleanup(self.wipe_whitelist)
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.content, "a.b.c.d\ne.f.g.h")
+        self.assertEqual(response.content, b"a.b.c.d\ne.f.g.h")
 
     def test_whitelist_add(self):
         self.create_whitelist()
@@ -52,12 +53,12 @@ class WhitelistTester(TestCase):
         url = reverse('whitelist_add')
         response = self.client.post(url, {'metrics': ['i.j.k.l']})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.content, "OK")
+        self.assertEqual(response.content, b"OK")
 
         url = reverse('whitelist_show')
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.content, "a.b.c.d\ne.f.g.h\ni.j.k.l")
+        self.assertEqual(response.content, b"a.b.c.d\ne.f.g.h\ni.j.k.l")
 
     def test_whitelist_add_existing(self):
         self.create_whitelist()
@@ -66,12 +67,12 @@ class WhitelistTester(TestCase):
         url = reverse('whitelist_add')
         response = self.client.post(url, {'metrics': ['a.b.c.d']})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.content, "OK")
+        self.assertEqual(response.content, b"OK")
 
         url = reverse('whitelist_show')
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.content, "a.b.c.d\ne.f.g.h")
+        self.assertEqual(response.content, b"a.b.c.d\ne.f.g.h")
 
     def test_whitelist_remove(self):
         self.create_whitelist()
@@ -80,12 +81,12 @@ class WhitelistTester(TestCase):
         url = reverse('whitelist_remove')
         response = self.client.post(url, {'metrics': ['a.b.c.d']})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.content, "OK")
+        self.assertEqual(response.content, b"OK")
 
         url = reverse('whitelist_show')
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.content, "e.f.g.h")
+        self.assertEqual(response.content, b"e.f.g.h")
 
     def test_whitelist_remove_missing(self):
         self.create_whitelist()
@@ -94,12 +95,12 @@ class WhitelistTester(TestCase):
         url = reverse('whitelist_remove')
         response = self.client.post(url, {'metrics': ['i.j.k.l']})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.content, "OK")
+        self.assertEqual(response.content, b"OK")
 
         url = reverse('whitelist_show')
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.content, "a.b.c.d\ne.f.g.h")
+        self.assertEqual(response.content, b"a.b.c.d\ne.f.g.h")
 
     def test_save_whitelist(self):
         try:

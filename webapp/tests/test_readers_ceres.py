@@ -4,15 +4,20 @@ import os
 from os.path import join, isdir
 import shutil
 import time
+import unittest
 
 from django.conf import settings
 
-import ceres
+try:
+    import ceres
+except ImportError:
+    ceres = False
 
 from graphite.readers import CeresReader
 from graphite.wsgi import application  # NOQA makes sure we have a working WSGI app
 
 
+@unittest.skipIf(not ceres, 'ceres not installed')
 class CeresReaderTests(TestCase):
     test_dir = join(settings.CERES_DIR)
 
@@ -50,8 +55,8 @@ class CeresReaderTests(TestCase):
         reader = CeresReader(ceres.CeresTree(self.test_dir).getNode('ceres.reader.tests.worker1.cpu'), 'ceres.reader.tests.worker1.cpu')
         intervals = reader.get_intervals()
         for interval in intervals:
-          self.assertEqual(interval.start, self.start_ts)
-          self.assertEqual(interval.end, self.start_ts+1)
+            self.assertEqual(interval.start, self.start_ts)
+            self.assertEqual(interval.end, self.start_ts+1)
 
     # Confirm fetch works.
     def test_CeresReader_fetch(self):

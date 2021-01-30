@@ -2,7 +2,7 @@ import fnmatch
 import os.path
 import re
 
-EXPAND_BRACES_RE = re.compile(r'.*(\{.*?[^\\]?\})')
+EXPAND_BRACES_RE = re.compile(r'(\{([^\{\}]*)\})')
 
 
 def get_real_metric_path(absolute_path, metric_path):
@@ -26,24 +26,15 @@ def fs_to_metric(path):
     return os.path.join(dirpath, filename.split('.')[0]).replace(os.sep, '.')
 
 
-def _deduplicate(entries):
-    yielded = set()
-    for entry in entries:
-        if entry not in yielded:
-            yielded.add(entry)
-            yield entry
-
-
 def extract_variants(pattern):
     """Extract the pattern variants (ie. {foo,bar}baz = foobaz or barbaz)."""
     v1, v2 = pattern.find('{'), pattern.find('}')
     if v1 > -1 and v2 > v1:
         variations = pattern[v1 + 1:v2].split(',')
         variants = [pattern[:v1] + v + pattern[v2 + 1:] for v in variations]
-
+        return list({r for v in variants for r in extract_variants(v)})
     else:
-        variants = [pattern]
-    return list(_deduplicate(variants))
+        return [pattern]
 
 
 def match_entries(entries, pattern):
@@ -53,7 +44,7 @@ def match_entries(entries, pattern):
     for variant in expand_braces(pattern):
         matching.extend(fnmatch.filter(entries, variant))
 
-    return list(_deduplicate(matching))
+    return list(set(matching))
 
 
 """
@@ -65,25 +56,13 @@ def match_entries(entries, pattern):
 def expand_braces(s):
     res = list()
 
-    # Used instead of s.strip('{}') because strip is greedy.
-    # We want to remove only ONE leading { and ONE trailing }, if both exist
-    def remove_outer_braces(s):
-        if s[0] == '{' and s[-1] == '}':
-            return s[1:-1]
-        return s
-
     m = EXPAND_BRACES_RE.search(s)
     if m is not None:
-        sub = m.group(1)
+        sub = m.group(2)
         open_brace, close_brace = m.span(1)
-        if ',' in sub:
-            for pat in sub.strip('{}').split(','):
-                res.extend(expand_braces(
-                    s[:open_brace] + pat + s[close_brace:]))
-        else:
-            res.extend(expand_braces(
-                s[:open_brace] + remove_outer_braces(sub) + s[close_brace:]))
+        for pat in sub.split(','):
+            res.extend(expand_braces(s[:open_brace] + pat + s[close_brace:]))
     else:
-        res.append(s.replace('\\}', '}'))
+        res.append(s)
 
     return list(set(res))

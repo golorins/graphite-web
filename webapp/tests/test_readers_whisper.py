@@ -79,14 +79,14 @@ class WhisperReadersTests(TestCase):
         ts = int(time.time())
         intervals = reader.get_intervals()
         for interval in intervals:
-          self.assertEqual(int(interval.start), ts-60)
-          self.assertEqual(int(interval.end), ts)
+            self.assertEqual(int(interval.start), ts - 60)
+            self.assertIn(int(interval.end), [ts, ts - 1])
 
         # read it again to validate cache works
         intervals = reader.get_intervals()
         for interval in intervals:
-          self.assertEqual(int(interval.start),ts-60)
-          self.assertEqual(int(interval.end), ts)
+            self.assertEqual(int(interval.start),ts - 60)
+            self.assertIn(int(interval.end), [ts, ts - 1])
 
     # Confirm fetch works.
     def test_GzippedWhisperReader_fetch(self):
@@ -120,14 +120,14 @@ class WhisperReadersTests(TestCase):
         ts = int(time.time())
         intervals = reader.get_intervals()
         for interval in intervals:
-          self.assertEqual(int(interval.start),ts-60)
-          self.assertEqual(int(interval.end), ts)
+            self.assertEqual(int(interval.start),ts - 60)
+            self.assertIn(int(interval.end), [ts, ts - 1])
 
         # read it again to validate cache works
         intervals = reader.get_intervals()
         for interval in intervals:
-          self.assertEqual(int(interval.start),ts-60)
-          self.assertEqual(int(interval.end), ts)
+            self.assertEqual(int(interval.start),ts - 60)
+            self.assertIn(int(interval.end), [ts, ts - 1])
 
     # Confirm get_raw_step works
     def test_WhisperReader_get_raw_step(self):
@@ -171,7 +171,7 @@ class WhisperReadersTests(TestCase):
         # Test broken whisper file
         f = open(self.worker2, 'rb+')
         f.seek(10)
-        f.write('Bad Data')
+        f.write(b'Bad Data')
         f.close()
 
         reader = WhisperReader(self.worker2, 'hosts.worker2.cpu')

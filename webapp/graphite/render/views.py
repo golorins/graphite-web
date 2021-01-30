@@ -14,29 +14,22 @@ limitations under the License."""
 import csv
 import math
 import pytz
-import httplib
+import six.moves.http_client
 
 from datetime import datetime
 from time import time
 from random import shuffle
-from urllib import urlencode
-from urlparse import urlsplit, urlunsplit
-from cgi import parse_qs
-from cStringIO import StringIO
-
-try:
-  import cPickle as pickle
-except ImportError:
-  import pickle
+from six.moves.urllib.parse import urlencode, urlsplit, urlunsplit, parse_qs
 
 from graphite.compat import HttpResponse
+from graphite.errors import InputParameterError, handleInputParameterError
 from graphite.user_util import getProfileByUsername
-from graphite.util import json, unpickle
+from graphite.util import json, unpickle, pickle, msgpack, BytesIO
 from graphite.storage import extractForwardHeaders
 from graphite.logger import log
 from graphite.render.evaluator import evaluateTarget
 from graphite.render.attime import parseATTime
-from graphite.render.functions import PieFunctions
+from graphite.functions import loadFunctions, PieFunction
 from graphite.render.hashing import hashRequest, hashData
 from graphite.render.glyph import GraphTypes
 from graphite.tags.models import Series, Tag, TagValue, SeriesTag  # noqa # pylint: disable=unused-import
@@ -47,11 +40,23 @@ from django.core.cache import cache
 from django.core.exceptions import ObjectDoesNotExist
 from django.conf import settings
 from django.utils.cache import add_never_cache_headers, patch_response_headers
+from six.moves import zip
 
 
+loadFunctions()
+
+
+@handleInputParameterError
 def renderView(request):
   start = time()
-  (graphOptions, requestOptions) = parseOptions(request)
+
+  try:
+    # we consider exceptions thrown by the option
+    # parsing to be due to user input error
+    (graphOptions, requestOptions) = parseOptions(request)
+  except Exception as e:
+    raise InputParameterError(str(e))
+
   useCache = 'noCache' not in requestOptions
   cacheTimeout = requestOptions['cacheTimeout']
   # TODO: Make that a namedtuple or a class.
@@ -63,9 +68,11 @@ def renderView(request):
     'template' : requestOptions['template'],
     'tzinfo' : requestOptions['tzinfo'],
     'forwardHeaders': requestOptions['forwardHeaders'],
+    'sourceIdHeaders': requestOptions['sourceIdHeaders'],
     'data' : [],
     'prefetched' : {},
     'xFilesFactor' : requestOptions['xFilesFactor'],
+    'maxDataPoints' : requestOptions.get('maxDataPoints', None),
   }
   data = requestContext['data']
 
@@ -87,16 +94,16 @@ def renderView(request):
     for target in requestOptions['targets']:
       if target.find(':') >= 0:
         try:
-          name,value = target.split(':',1)
+          name, value = target.split(':', 1)
           value = float(value)
-        except:
+        except ValueError:
           raise ValueError("Invalid target '%s'" % target)
-        data.append( (name,value) )
+        data.append((name, value))
       else:
         seriesList = evaluateTarget(requestContext, target)
 
         for series in seriesList:
-          func = PieFunctions[requestOptions['pieMode']]
+          func = PieFunction(requestOptions['pieMode'])
           data.append( (series.name, func(requestContext, series) or 0 ))
 
   elif requestOptions['graphType'] == 'line':
@@ -138,6 +145,8 @@ def renderView(request):
       response = renderViewRaw(requestOptions, data)
     elif format == 'pickle':
       response = renderViewPickle(requestOptions, data)
+    elif format == 'msgpack':
+      response = renderViewMsgPack(requestOptions, data)
 
   # if response wasn't generated above, render a graph image
   if not response:
@@ -193,51 +202,45 @@ def renderViewCsv(requestOptions, data):
 
 def renderViewJson(requestOptions, data):
   series_data = []
-  if 'maxDataPoints' in requestOptions and any(data):
-    maxDataPoints = requestOptions['maxDataPoints']
-    if maxDataPoints == 1:
-      for series in data:
-        series.consolidate(len(series))
-        datapoints = zip(series, [int(series.start)])
-        series_data.append(dict(target=series.name, tags=series.tags, datapoints=datapoints))
-    else:
-      startTime = min([series.start for series in data])
-      endTime = max([series.end for series in data])
-      timeRange = endTime - startTime
-      for series in data:
-        numberOfDataPoints = timeRange/series.step
-        if maxDataPoints < numberOfDataPoints:
-          valuesPerPoint = math.ceil(float(numberOfDataPoints) / float(maxDataPoints))
-          secondsPerPoint = int(valuesPerPoint * series.step)
-          # Nudge start over a little bit so that the consolidation bands align with each call
-          # removing 'jitter' seen when refreshing.
-          nudge = secondsPerPoint + (series.start % series.step) - (series.start % secondsPerPoint)
-          series.start = series.start + nudge
-          valuesToLose = int(nudge/series.step)
-          for r in range(1, valuesToLose):
-            del series[0]
-          series.consolidate(valuesPerPoint)
-          timestamps = range(int(series.start), int(series.end) + 1, int(secondsPerPoint))
-        else:
-          timestamps = range(int(series.start), int(series.end) + 1, int(series.step))
-        datapoints = zip(series, timestamps)
-        series_data.append(dict(target=series.name, tags=series.tags, datapoints=datapoints))
-  elif 'noNullPoints' in requestOptions and any(data):
-    for series in data:
-      values = []
-      for (index,v) in enumerate(series):
-        if v is not None and not math.isnan(v):
-          timestamp = series.start + (index * series.step)
-          values.append((v,timestamp))
-      if len(values) > 0:
-        series_data.append(dict(target=series.name, tags=series.tags, datapoints=values))
-  else:
-    for series in data:
-      timestamps = range(int(series.start), int(series.end) + 1, int(series.step))
-      datapoints = zip(series, timestamps)
-      series_data.append(dict(target=series.name, tags=series.tags, datapoints=datapoints))
 
-  output = json.dumps(series_data, indent=(2 if requestOptions.get('pretty') else None)).replace('None,', 'null,').replace('NaN,', 'null,').replace('Infinity,', '1e9999,')
+  if any(data):
+    startTime = min([series.start for series in data])
+    endTime = max([series.end for series in data])
+    timeRange = endTime - startTime
+
+    for series in data:
+      if 'maxDataPoints' in requestOptions:
+        maxDataPoints = requestOptions['maxDataPoints']
+        if maxDataPoints == 1:
+          series.consolidate(len(series))
+        else:
+          numberOfDataPoints = timeRange/series.step
+          if maxDataPoints < numberOfDataPoints:
+            valuesPerPoint = math.ceil(float(numberOfDataPoints) / float(maxDataPoints))
+            secondsPerPoint = int(valuesPerPoint * series.step)
+            # Nudge start over a little bit so that the consolidation bands align with each call
+            # removing 'jitter' seen when refreshing.
+            nudge = secondsPerPoint + (series.start % series.step) - (series.start % secondsPerPoint)
+            series.start = series.start + nudge
+            valuesToLose = int(nudge/series.step)
+            for r in range(1, valuesToLose):
+              del series[0]
+            series.consolidate(valuesPerPoint)
+
+      datapoints = series.datapoints()
+
+      if 'noNullPoints' in requestOptions:
+        datapoints = [
+          point for point in datapoints
+          if point[0] is not None and not math.isnan(point[0])
+        ]
+        if not datapoints:
+          continue
+
+      series_data.append(dict(target=series.name, tags=dict(series.tags), datapoints=datapoints))
+
+  output = json.dumps(series_data, indent=(2 if requestOptions.get('pretty') else None)) \
+      .replace('NaN,', 'null,').replace('Infinity,', '1e9999,')
 
   if 'jsonp' in requestOptions:
     response = HttpResponse(
@@ -323,6 +326,13 @@ def renderViewPickle(requestOptions, data):
   return response
 
 
+def renderViewMsgPack(requestOptions, data):
+  response = HttpResponse(content_type='application/x-msgpack')
+  seriesInfo = [series.getInfo() for series in data]
+  msgpack.dump(seriesInfo, response, use_bin_type=True)
+  return response
+
+
 def parseOptions(request):
   queryParams = request.GET.copy()
   queryParams.update(request.POST)
@@ -332,7 +342,9 @@ def parseOptions(request):
   requestOptions = {}
 
   graphType = queryParams.get('graphType','line')
-  assert graphType in GraphTypes, "Invalid graphType '%s', must be one of %s" % (graphType,GraphTypes.keys())
+  if graphType not in GraphTypes:
+    raise AssertionError("Invalid graphType '%s', must be one of %s"
+                         % (graphType,list(GraphTypes)))
   graphClass = GraphTypes[graphType]
 
   # Fill in the requestOptions
@@ -342,6 +354,7 @@ def parseOptions(request):
   cacheTimeout = int( queryParams.get('cacheTimeout', settings.DEFAULT_CACHE_DURATION) )
   requestOptions['targets'] = []
   requestOptions['forwardHeaders'] = extractForwardHeaders(request)
+  requestOptions['sourceIdHeaders'] = extractSourceIdHeaders(request)
 
   # Extract the targets out of the queryParams
   mytargets = []
@@ -451,18 +464,38 @@ def parseOptions(request):
   return (graphOptions, requestOptions)
 
 
+# extract headers which get set by Grafana when issuing queries, to help identifying where a query came from.
+# user-defined headers from settings.INPUT_VALIDATION_SOURCE_ID_HEADERS also get extracted and mixed
+# with the standard Grafana headers.
+def extractSourceIdHeaders(request):
+    source_headers = {
+        'X-Grafana-Org-ID': 'grafana-org-id',
+        'X-Dashboard-ID': 'dashboard-id',
+        'X-Panel-ID': 'panel-id',
+    }
+    source_headers.update(settings.INPUT_VALIDATION_SOURCE_ID_HEADERS)
+
+    headers = {}
+    for hdr_name, log_name in source_headers.items():
+        value = request.META.get('HTTP_' + hdr_name.upper().replace('-', '_'))
+        if value:
+            headers[log_name] = value
+
+    return headers
+
+
 connectionPools = {}
 
 
 def connector_class_selector(https_support=False):
-    return httplib.HTTPSConnection if https_support else httplib.HTTPConnection
+    return six.moves.http_client.HTTPSConnection if https_support else six.moves.http_client.HTTPConnection
 
 
 def delegateRendering(graphType, graphOptions, headers=None):
   if headers is None:
     headers = {}
   start = time()
-  postData = graphType + '\n' + pickle.dumps(graphOptions)
+  postData = (graphType + '\n').encode() + pickle.dumps(graphOptions)
   servers = settings.RENDERING_HOSTS[:] #make a copy so we can shuffle it safely
   shuffle(servers)
   connector_class = connector_class_selector(settings.INTRACLUSTER_HTTPS)
@@ -482,7 +515,7 @@ def delegateRendering(graphType, graphOptions, headers=None):
       # Send the request
       try:
         connection.request('POST','/render/local/', postData, headers)
-      except httplib.CannotSendRequest:
+      except six.moves.http_client.CannotSendRequest:
         connection = connector_class(server) #retry once
         connection.timeout = settings.REMOTE_RENDER_CONNECT_TIMEOUT
         connection.request('POST', '/render/local/', postData, headers)
@@ -501,7 +534,7 @@ def delegateRendering(graphType, graphOptions, headers=None):
       log.rendering('Spent a total of %.6f seconds doing remote rendering work' % (time() - start))
       pool.add(connection)
       return imageData
-    except:
+    except Exception:
       log.exception("Exception while attempting remote rendering request on %s" % server)
       log.rendering('Exception while remotely rendering on %s wasted %.6f' % (server,time() - start2))
       continue
@@ -510,8 +543,8 @@ def delegateRendering(graphType, graphOptions, headers=None):
 def renderLocalView(request):
   try:
     start = time()
-    reqParams = StringIO(request.body)
-    graphType = reqParams.readline().strip()
+    reqParams = BytesIO(request.body)
+    graphType = reqParams.readline().strip().decode()
     optionsPickle = reqParams.read()
     reqParams.close()
     graphClass = GraphTypes[graphType]
@@ -521,7 +554,7 @@ def renderLocalView(request):
     response = buildResponse(image)
     add_never_cache_headers(response)
     return response
-  except:
+  except Exception:
     log.exception("Exception in graphite.render.views.rawrender")
     return HttpResponseServerError()
 
@@ -564,7 +597,7 @@ def renderMyGraphView(request,username,graphName):
 
 
 def doImageRender(graphClass, graphOptions):
-  pngData = StringIO()
+  pngData = BytesIO()
   t = time()
   img = graphClass(**graphOptions)
   img.output(pngData)

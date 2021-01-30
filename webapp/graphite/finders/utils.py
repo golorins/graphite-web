@@ -2,8 +2,8 @@
 import time
 import abc
 
+from graphite.node import BranchNode, LeafNode  # noqa
 from graphite.util import is_pattern
-from graphite.readers.utils import wait_for_result, FetchInProgress
 from graphite.intervals import Interval
 
 
@@ -43,10 +43,11 @@ class BaseFinder(object):
     local = True
     # set to True if this finder shouldn't be used
     disabled = False
+    # set to True if this finder supports seriesByTag
+    tags = False
 
     def __init__(self):
         """Initialize the finder."""
-        pass
 
     @abc.abstractmethod
     def find_nodes(self, query):
@@ -58,92 +59,104 @@ class BaseFinder(object):
         Returns:
           generator of Node
         """
-        pass
 
+    def get_index(self, requestContext):
+        """Get a list of all series
 
-    # The methods bellow are fully optional and BaseFinder provides
+        Args:
+          requestContext
+
+        Returns:
+          list of series
+        """
+        query = FindQuery(
+            '**', None, None,
+            local=requestContext.get('localOnly'),
+            headers=requestContext.get('forwardHeaders'),
+            leaves_only=True,
+        )
+
+        return sorted([node.path for node in self.find_nodes(query) if node.is_leaf])
+
+    # The methods below are fully optional and BaseFinder provides
     # a default implementation. They can be re-implemented by finders
     # that could provide a more efficient way of doing it.
     #
     # The API isn't fully finalized yet and can be subject to change
     # until it's documented.
 
-    def find_nodes_multi(self, queries):
+    @classmethod
+    def factory(cls):
+        return [cls()]
+
+    def find_multi(self, queries):
         """Executes multiple find queries.
 
-        Works like multiple find_node(), this gives the ability to remote
+        Works like multiple find_node(), this gives the ability for
         finders to parallelize the work.
 
         Returns:
-          generator of Node
+          generator of (Node, query)
         """
         for query in queries:
             for node in self.find_nodes(query):
-                yield node
+                yield (node, query)
 
-    def fetch(self, nodes_or_patterns, start_time, end_time,
-              now=None, requestContext=None):
-        """Fetch multiple nodes or patterns at once.
+    def fetch(self, patterns, start_time, end_time, now=None, requestContext=None):
+        """Fetch multiple patterns at once.
 
-        This method is used to fetch multiple nodes or pattern at once, this
+        This method is used to fetch multiple patterns at once, this
         allows alternate finders to do batching on their side when they can.
 
-        The remote finder implements find API and uses it when
-        settings.REMOTE_PREFETCH_DATA is set.
-
         Returns:
-          FetchInProgress returning and iterable or {
-                    'pathExpression': pattern,
-                    'path': node.path,
-                    'time_info': time_info,
-                    'values': values,
+          an iterable of
+          {
+            'pathExpression': pattern,
+            'path': node.path,
+            'time_info': time_info,
+            'values': values,
           }
         """
         requestContext = requestContext or {}
 
-        nodes = []
-        patterns = []
-
-        for v in nodes_or_patterns:
-            if isinstance(v, basestring):
-                patterns.append(v)
-            else:
-                nodes.append(v)
-
-        nodes_and_patterns = []
-        for node in nodes:
-            nodes_and_patterns.append((node, node.path))
-
-        for pattern in patterns:
-            query = FindQuery(
+        queries = [
+            FindQuery(
                 pattern, start_time, end_time,
                 local=requestContext.get('localOnly'),
                 headers=requestContext.get('forwardHeaders'),
                 leaves_only=True,
             )
-            for node in self.find_nodes(query):
-                nodes_and_patterns.append((node, pattern))
+            for pattern in patterns
+        ]
 
-        # TODO: We could add Graphite-API's 'find_multi' support here.
-        results_nodes_and_patterns = []
+        results = []
 
-        for node, pattern in nodes_and_patterns:
+        for node, query in self.find_multi(queries):
+            if not isinstance(node, LeafNode):
+                continue
+
             result = node.fetch(
                 start_time, end_time,
                 now=now, requestContext=requestContext
             )
-            results_nodes_and_patterns.append((result, node, pattern))
 
-        def _extract():
-            for result, node, pattern in results_nodes_and_patterns:
-                time_info, values = wait_for_result(result)
+            if result is None:
+                continue
 
-                yield {
-                    'pathExpression': pattern,
-                    'path': node.path,
-                    'name': node.path,
-                    'time_info': time_info,
-                    'values': values,
-                }
+            time_info, values = result
 
-        return FetchInProgress(_extract)
+            results.append({
+                'pathExpression': query.pattern,
+                'path': node.path,
+                'name': node.path,
+                'time_info': time_info,
+                'values': values,
+            })
+
+        return results
+
+    def auto_complete_tags(self, exprs, tagPrefix=None, limit=None, requestContext=None):
+        return []
+
+    def auto_complete_values(self, exprs, tag, valuePrefix=None, limit=None, requestContext=None):
+        return []

@@ -1,20 +1,30 @@
 import re
+import six
+
+from graphite.errors import NormalizeEmptyResultError, InputParameterError
+from graphite.functions import SeriesFunction
+from graphite.logger import log
+from graphite.render.grammar import grammar
+from graphite.render.datalib import fetchData, TimeSeries, prefetchData
+from graphite.functions.params import validateParams
 
 from django.conf import settings
-from graphite.render.grammar import grammar
-from graphite.render.datalib import fetchData, TimeSeries, prefetchRemoteData
 
-def evaluateTarget(requestContext, targets, noPrefetch=False):
+
+def evaluateTarget(requestContext, targets):
   if not isinstance(targets, list):
     targets = [targets]
 
-  if settings.REMOTE_PREFETCH_DATA and not requestContext.get('localOnly') and not noPrefetch:
-    prefetchRemoteData(requestContext, targets)
+  pathExpressions = extractPathExpressions(requestContext, targets)
+  prefetchData(requestContext, pathExpressions)
 
   seriesList = []
 
   for target in targets:
-    if isinstance(target, basestring):
+    if not target:
+      continue
+
+    if isinstance(target, six.string_types):
       if not target.strip():
         continue
       target = grammar.parseString(target)
@@ -29,18 +39,19 @@ def evaluateTarget(requestContext, targets, noPrefetch=False):
 
   return seriesList
 
+
 def evaluateTokens(requestContext, tokens, replacements=None, pipedArg=None):
   if tokens.template:
     arglist = dict()
     if tokens.template.kwargs:
-      arglist.update(dict([(kwarg.argname, evaluateTokens(requestContext, kwarg.args[0])) for kwarg in tokens.template.kwargs]))
+      arglist.update(dict([(kwarg.argname, evaluateScalarTokens(kwarg.args[0])) for kwarg in tokens.template.kwargs]))
     if tokens.template.args:
-      arglist.update(dict([(str(i+1), evaluateTokens(requestContext, arg)) for i, arg in enumerate(tokens.template.args)]))
+      arglist.update(dict([(str(i+1), evaluateScalarTokens(arg)) for i, arg in enumerate(tokens.template.args)]))
     if 'template' in requestContext:
       arglist.update(requestContext['template'])
     return evaluateTokens(requestContext, tokens.template, arglist)
 
-  elif tokens.expression:
+  if tokens.expression:
     if tokens.expression.pipedCalls:
       # when the expression has piped calls, we pop the right-most call and pass the remaining
       # expression into it via pipedArg, to get the same result as a nested call
@@ -49,15 +60,15 @@ def evaluateTokens(requestContext, tokens, replacements=None, pipedArg=None):
 
     return evaluateTokens(requestContext, tokens.expression, replacements)
 
-  elif tokens.pathExpression:
+  if tokens.pathExpression:
     expression = tokens.pathExpression
     if replacements:
       for name in replacements:
         if expression == '$'+name:
           val = replacements[name]
-          if not isinstance(val, str) and not isinstance(val, basestring):
+          if not isinstance(val, six.string_types):
             return val
-          elif re.match('^-?[\d.]+$', val):
+          elif re.match(r'^-?[\d.]+$', val):
             return float(val)
           else:
             return val
@@ -65,13 +76,24 @@ def evaluateTokens(requestContext, tokens, replacements=None, pipedArg=None):
           expression = expression.replace('$'+name, str(replacements[name]))
     return fetchData(requestContext, expression)
 
-  elif tokens.call:
+  if tokens.call:
     if tokens.call.funcname == 'template':
       # if template propagates down here, it means the grammar didn't match the invocation
       # as tokens.template. this generally happens if you try to pass non-numeric/string args
-      raise ValueError("invalid template() syntax, only string/numeric arguments are allowed")
+      raise InputParameterError("invalid template() syntax, only string/numeric arguments are allowed")
 
-    func = SeriesFunctions[tokens.call.funcname]
+    if tokens.call.funcname == 'seriesByTag':
+      return fetchData(requestContext, tokens.call.raw)
+
+    try:
+      func = SeriesFunction(tokens.call.funcname)
+    except KeyError:
+      msg = 'Received request for unknown function: {func}'.format(func=tokens.call.funcname)
+      log.warning(msg)
+
+      # even if input validation enforcement is disabled, there's nothing else we can do here
+      raise InputParameterError(msg)
+
     rawArgs = tokens.call.args or []
     if pipedArg is not None:
       rawArgs.insert(0, pipedArg)
@@ -79,32 +101,133 @@ def evaluateTokens(requestContext, tokens, replacements=None, pipedArg=None):
     requestContext['args'] = rawArgs
     kwargs = dict([(kwarg.argname, evaluateTokens(requestContext, kwarg.args[0], replacements))
                    for kwarg in tokens.call.kwargs])
+
+    def handleInvalidParameters(e):
+      if not getattr(handleInvalidParameters, 'alreadyLogged', False):
+        log.warning(invalidParamLogMsg(requestContext, str(e), tokens.call.funcname, args, kwargs))
+
+        # only log invalid parameters once
+        setattr(handleInvalidParameters, 'alreadyLogged', True)
+
+      if settings.ENFORCE_INPUT_VALIDATION:
+        raise
+
+    if hasattr(func, 'params'):
+      try:
+        (args, kwargs) = validateParams(tokens.call.funcname, func.params, args, kwargs)
+      except InputParameterError as e:
+        handleInvalidParameters(e)
+
     try:
       return func(requestContext, *args, **kwargs)
     except NormalizeEmptyResultError:
       return []
+    except InputParameterError as e:
+      handleInvalidParameters(e)
 
-  elif tokens.number:
+  return evaluateScalarTokens(tokens)
+
+
+def invalidParamLogMsg(requestContext, exception, func, args, kwargs):
+  source = ''
+
+  if 'sourceIdHeaders' in requestContext:
+    headers = list(requestContext['sourceIdHeaders'].keys())
+    headers.sort()
+    for name in headers:
+      if source:
+        source += ', '
+      source += '{name}: {value}'.format(
+        name=name,
+        value=requestContext['sourceIdHeaders'][name])
+
+  logMsg = 'Received invalid parameters ({msg}): {func} ({args})'.format(
+      msg=exception,
+      func=func,
+      args=', '.join(
+        argList
+        for argList in [
+          ', '.join(repr(arg) for arg in args),
+          ', '.join('{k}={v}'.format(k=str(k), v=repr(v)) for k, v in kwargs.items()),
+        ] if argList
+      ))
+
+  if not source:
+    return logMsg
+
+  logMsg += '; source: ({source})'.format(source=source)
+  return logMsg
+
+
+def evaluateScalarTokens(tokens):
+  if tokens.number:
     if tokens.number.integer:
       return int(tokens.number.integer)
-    elif tokens.number.float:
+    if tokens.number.float:
       return float(tokens.number.float)
-    elif tokens.number.scientific:
+    if tokens.number.scientific:
       return float(tokens.number.scientific[0])
 
-  elif tokens.string:
+    raise InputParameterError("unknown numeric type in target evaluator")
+
+  if tokens.string:
     return tokens.string[1:-1]
 
-  elif tokens.boolean:
+  if tokens.boolean:
     return tokens.boolean[0] == 'true'
 
-  elif tokens.none:
+  if tokens.none:
     return None
 
-  else:
-    raise ValueError("unknown token in target evaluator")
+  if tokens.infinity:
+    return float('inf')
+
+  raise InputParameterError("unknown token in target evaluator")
 
 
-# Avoid import circularities
-from graphite.render.functions import (SeriesFunctions,
-                                       NormalizeEmptyResultError)  # noqa
+def extractPathExpressions(requestContext, targets):
+  # Returns a list of unique pathExpressions found in the targets list
+
+  pathExpressions = set()
+
+  def extractPathExpression(requestContext, tokens, replacements=None):
+    if tokens.template:
+      arglist = dict()
+      if tokens.template.kwargs:
+        arglist.update(dict([(kwarg.argname, evaluateScalarTokens(kwarg.args[0])) for kwarg in tokens.template.kwargs]))
+      if tokens.template.args:
+        arglist.update(dict([(str(i+1), evaluateScalarTokens(arg)) for i, arg in enumerate(tokens.template.args)]))
+      if 'template' in requestContext:
+        arglist.update(requestContext['template'])
+      extractPathExpression(requestContext, tokens.template, arglist)
+    elif tokens.expression:
+      extractPathExpression(requestContext, tokens.expression, replacements)
+      if tokens.expression.pipedCalls:
+        for token in tokens.expression.pipedCalls:
+          extractPathExpression(requestContext, token, replacements)
+    elif tokens.pathExpression:
+      expression = tokens.pathExpression
+      if replacements:
+        for name in replacements:
+          if expression != '$'+name:
+            expression = expression.replace('$'+name, str(replacements[name]))
+      pathExpressions.add(expression)
+    elif tokens.call:
+      # if we're prefetching seriesByTag, pass the entire call back as a path expression
+      if tokens.call.funcname == 'seriesByTag':
+        pathExpressions.add(tokens.call.raw)
+      else:
+        for a in tokens.call.args:
+          extractPathExpression(requestContext, a, replacements)
+
+  for target in targets:
+    if not target:
+      continue
+
+    if isinstance(target, six.string_types):
+      if not target.strip():
+        continue
+      target = grammar.parseString(target)
+    extractPathExpression(requestContext, target)
+
+  return list(pathExpressions)

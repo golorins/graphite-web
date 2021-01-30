@@ -1,11 +1,10 @@
-import json
 import re
 import errno
 
 from os.path import getmtime
-from urllib import urlencode
-from ConfigParser import ConfigParser
-from django.shortcuts import render_to_response
+from six.moves.urllib.parse import urlencode
+from six.moves.configparser import ConfigParser
+from django.shortcuts import render
 from django.http import QueryDict
 from django.conf import settings
 from django.contrib.auth import login, authenticate, logout
@@ -13,9 +12,10 @@ from django.contrib.staticfiles import finders
 from django.utils.safestring import mark_safe
 from graphite.compat import HttpResponse
 from graphite.dashboard.models import Dashboard, Template
+from graphite.dashboard.send_graph import send_graph_email
 from graphite.render.views import renderView
-from send_graph import send_graph_email
-
+from graphite.util import json
+from graphite.user_util import isAuthenticated
 
 fieldRegex = re.compile(r'<([^>]+)>')
 defaultScheme = {
@@ -42,6 +42,7 @@ defaultKeyboardShortcuts = {
 }
 
 ALL_PERMISSIONS = ['change', 'delete']
+
 
 class DashboardConfig:
   def __init__(self):
@@ -151,7 +152,7 @@ def dashboard(request, name=None):
     else:
       context['initialState'] = dashboard.state
 
-  return render_to_response("dashboard.html", context)
+  return render(request, "dashboard.html", context)
 
 
 def template(request, name, val):
@@ -159,7 +160,7 @@ def template(request, name, val):
 
   try:
     config.check()
-  except OSError, e:
+  except OSError as e:
     if e.errno == errno.ENOENT:
       template_conf_missing = True
     else:
@@ -199,11 +200,12 @@ def template(request, name, val):
     state = json.loads(template.loadState(val))
     state['name'] = '%s/%s' % (name, val)
     context['initialState'] = json.dumps(state)
-  return render_to_response("dashboard.html", context)
+  return render(request, "dashboard.html", context)
+
 
 def getPermissions(user):
   """Return [change, delete] based on authorisation model and user privileges/groups"""
-  if user and not user.is_authenticated():
+  if user and not isAuthenticated(user):
     user = None
   if not settings.DASHBOARD_REQUIRE_AUTHENTICATION:
     return ALL_PERMISSIONS      # don't require login
@@ -231,7 +233,7 @@ def save(request, name):
     dashboard = Dashboard.objects.create(name=name, state=state)
   else:
     dashboard.state = state
-    dashboard.save();
+    dashboard.save()
 
   return json_response( dict(success=True) )
 
@@ -250,7 +252,7 @@ def save_template(request, name, key):
     template.save()
   else:
     template.setState(state, key)
-    template.save();
+    template.save()
 
   return json_response( dict(success=True) )
 
@@ -358,7 +360,7 @@ def find_template(request):
 
 def help(request):
   context = {}
-  return render_to_response("dashboardHelp.html", context)
+  return render(request, "dashboardHelp.html", context)
 
 
 def email(request):
